@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/docker/docker/opts"
+	"github.com/docker/docker/reference"
+	registrytypes "github.com/docker/engine-api/types/registry"
 	"github.com/gorilla/mux"
 
 	"github.com/Sirupsen/logrus"
@@ -149,22 +151,22 @@ func makeHTTPSURL(req string) string {
 	return testHTTPSServer.URL + req
 }
 
-func makeIndex(req string) *IndexInfo {
-	index := &IndexInfo{
+func makeIndex(req string) *registrytypes.IndexInfo {
+	index := &registrytypes.IndexInfo{
 		Name: makeURL(req),
 	}
 	return index
 }
 
-func makeHTTPSIndex(req string) *IndexInfo {
-	index := &IndexInfo{
+func makeHTTPSIndex(req string) *registrytypes.IndexInfo {
+	index := &registrytypes.IndexInfo{
 		Name: makeHTTPSURL(req),
 	}
 	return index
 }
 
-func makePublicIndex() *IndexInfo {
-	index := &IndexInfo{
+func makePublicIndex() *registrytypes.IndexInfo {
+	index := &registrytypes.IndexInfo{
 		Name:     IndexServer,
 		Secure:   true,
 		Official: true,
@@ -172,7 +174,7 @@ func makePublicIndex() *IndexInfo {
 	return index
 }
 
-func makeServiceConfig(mirrors []string, insecureRegistries []string) *ServiceConfig {
+func makeServiceConfig(mirrors []string, insecureRegistries []string) *registrytypes.ServiceConfig {
 	options := &Options{
 		Mirrors:            opts.NewListOpts(nil),
 		InsecureRegistries: opts.NewListOpts(nil),
@@ -349,16 +351,18 @@ func handlerGetDeleteTags(w http.ResponseWriter, r *http.Request) {
 	if !requiresAuth(w, r) {
 		return
 	}
-	repositoryName := mux.Vars(r)["repository"]
-	repositoryName = NormalizeLocalName(repositoryName)
-	repositoryName = strings.TrimPrefix(repositoryName, IndexName+"/")
-	tags, exists := testRepositories[repositoryName]
+	repositoryName, err := reference.WithName(mux.Vars(r)["repository"])
+	if err != nil {
+		apiError(w, "Could not parse repository", 400)
+		return
+	}
+	tags, exists := testRepositories[repositoryName.String()]
 	if !exists {
 		apiError(w, "Repository not found", 404)
 		return
 	}
 	if r.Method == "DELETE" {
-		delete(testRepositories, repositoryName)
+		delete(testRepositories, repositoryName.String())
 		writeResponse(w, true, 200)
 		return
 	}
@@ -370,11 +374,13 @@ func handlerGetTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vars := mux.Vars(r)
-	repositoryName := vars["repository"]
-	repositoryName = NormalizeLocalName(repositoryName)
-	repositoryName = strings.TrimPrefix(repositoryName, IndexName+"/")
+	repositoryName, err := reference.WithName(vars["repository"])
+	if err != nil {
+		apiError(w, "Could not parse repository", 400)
+		return
+	}
 	tagName := vars["tag"]
-	tags, exists := testRepositories[repositoryName]
+	tags, exists := testRepositories[repositoryName.String()]
 	if !exists {
 		apiError(w, "Repository not found", 404)
 		return
@@ -392,14 +398,16 @@ func handlerPutTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vars := mux.Vars(r)
-	repositoryName := vars["repository"]
-	repositoryName = NormalizeLocalName(repositoryName)
-	repositoryName = strings.TrimPrefix(repositoryName, IndexName+"/")
+	repositoryName, err := reference.WithName(vars["repository"])
+	if err != nil {
+		apiError(w, "Could not parse repository", 400)
+		return
+	}
 	tagName := vars["tag"]
-	tags, exists := testRepositories[repositoryName]
+	tags, exists := testRepositories[repositoryName.String()]
 	if !exists {
-		tags := make(map[string]string)
-		testRepositories[repositoryName] = tags
+		tags = make(map[string]string)
+		testRepositories[repositoryName.String()] = tags
 	}
 	tagValue := ""
 	readJSON(r, tagValue)
@@ -449,10 +457,10 @@ func handlerAuth(w http.ResponseWriter, r *http.Request) {
 }
 
 func handlerSearch(w http.ResponseWriter, r *http.Request) {
-	result := &SearchResults{
+	result := &registrytypes.SearchResults{
 		Query:      "fakequery",
 		NumResults: 1,
-		Results:    []SearchResult{{Name: "fakeimage", StarCount: 42}},
+		Results:    []registrytypes.SearchResult{{Name: "fakeimage", StarCount: 42}},
 	}
 	writeResponse(w, result, 200)
 }

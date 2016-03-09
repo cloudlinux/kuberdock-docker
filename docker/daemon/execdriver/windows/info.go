@@ -2,17 +2,23 @@
 
 package windows
 
-import "github.com/docker/docker/daemon/execdriver"
+import (
+	"github.com/docker/docker/daemon/execdriver"
+	"github.com/docker/engine-api/types/container"
+)
 
 type info struct {
-	ID     string
-	driver *driver
+	ID        string
+	driver    *Driver
+	isolation container.IsolationLevel
 }
 
-func (d *driver) Info(id string) execdriver.Info {
+// Info implements the exec driver Driver interface.
+func (d *Driver) Info(id string) execdriver.Info {
 	return &info{
-		ID:     id,
-		driver: d,
+		ID:        id,
+		driver:    d,
+		isolation: DefaultIsolation,
 	}
 }
 

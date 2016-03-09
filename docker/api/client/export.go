@@ -15,14 +15,14 @@ import (
 //
 // Usage: docker export [OPTIONS] CONTAINER
 func (cli *DockerCli) CmdExport(args ...string) error {
-	cmd := Cli.Subcmd("export", []string{"CONTAINER"}, "Export the contents of a container's filesystem as a tar archive", true)
+	cmd := Cli.Subcmd("export", []string{"CONTAINER"}, Cli.DockerCommands["export"].Description, true)
 	outfile := cmd.String([]string{"o", "-output"}, "", "Write to a file, instead of STDOUT")
 	cmd.Require(flag.Exact, 1)
 
 	cmd.ParseFlags(args, true)
 
 	var (
-		output io.Writer = cli.out
+		output = cli.out
 		err    error
 	)
 	if *outfile != "" {
@@ -34,14 +34,12 @@ func (cli *DockerCli) CmdExport(args ...string) error {
 		return errors.New("Cowardly refusing to save to a terminal. Use the -o flag or redirect.")
 	}
 
-	image := cmd.Arg(0)
-	sopts := &streamOpts{
-		rawTerminal: true,
-		out:         output,
-	}
-	if _, err := cli.stream("GET", "/containers/"+image+"/export", sopts); err != nil {
+	responseBody, err := cli.client.ContainerExport(cmd.Arg(0))
+	if err != nil {
 		return err
 	}
+	defer responseBody.Close()
 
-	return nil
+	_, err = io.Copy(output, responseBody)
+	return err
 }

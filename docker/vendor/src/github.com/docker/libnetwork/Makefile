@@ -1,31 +1,49 @@
-.PHONY: all all-local build build-local check check-code check-format run-tests check-local install-deps coveralls circle-ci
+.PHONY: all all-local build build-local clean cross cross-local check check-code check-format run-tests integration-tests check-local coveralls circle-ci-cross circle-ci-build circle-ci-check circle-ci
 SHELL=/bin/bash
-build_image=libnetwork-build
+build_image=libnetworkbuild
 dockerargs = --privileged -v $(shell pwd):/go/src/github.com/docker/libnetwork -w /go/src/github.com/docker/libnetwork
 container_env = -e "INSIDECONTAINER=-incontainer=true"
-docker = docker run --rm ${dockerargs} ${container_env} ${build_image}
-ciargs = -e "COVERALLS_TOKEN=$$COVERALLS_TOKEN" -e "INSIDECONTAINER=-incontainer=true"
-cidocker = docker run ${ciargs} ${dockerargs} golang:1.4
+docker = docker run --rm -it ${dockerargs} $$EXTRA_ARGS ${container_env} ${build_image}
+ciargs = -e CIRCLECI -e "COVERALLS_TOKEN=$$COVERALLS_TOKEN" -e "INSIDECONTAINER=-incontainer=true"
+cidocker = docker run ${dockerargs} ${ciargs} ${container_env} ${build_image}
+CROSS_PLATFORMS = linux/amd64 linux/386 linux/arm windows/amd64 windows/386
 
-all: ${build_image}.created
-	${docker} make all-local
+all: ${build_image}.created build check integration-tests clean
 
-all-local: check-local build-local
+all-local: build-local check-local integration-tests-local clean
 
 ${build_image}.created:
-	docker run --name=libnetworkbuild -v $(shell pwd):/go/src/github.com/docker/libnetwork -w /go/src/github.com/docker/libnetwork golang:1.4 make install-deps
-	docker commit libnetworkbuild ${build_image}
-	docker rm libnetworkbuild
+	docker build -f Dockerfile.build -t ${build_image} .
 	touch ${build_image}.created
 
 build: ${build_image}.created
-	${docker} make build-local
+	@echo "Building code... "
+	@${docker} ./wrapmake.sh build-local
+	@echo "Done building code"
 
 build-local:
-	$(shell which godep) go build -tags libnetwork_discovery ./...
+	@mkdir -p "bin"
+	$(shell which godep) go build -o "bin/dnet" ./cmd/dnet
+
+clean:
+	@if [ -d bin ]; then \
+		echo "Removing dnet binaries"; \
+		rm -rf bin; \
+	fi
+
+cross: ${build_image}.created
+	@mkdir -p "bin"
+	@for platform in ${CROSS_PLATFORMS}; do \
+		EXTRA_ARGS="-e GOOS=$${platform%/*} -e GOARCH=$${platform##*/}" ; \
+		echo "$${platform}..." ; \
+		${docker} make cross-local ; \
+	done
+
+cross-local:
+	$(shell which godep) go build -o "bin/dnet-$$GOOS-$$GOARCH" ./cmd/dnet
 
 check: ${build_image}.created
-	${docker} make check-local
+	@${docker} ./wrapmake.sh check-local
 
 check-code:
 	@echo "Checking code... "
@@ -45,35 +63,43 @@ run-tests:
 	    if ls $$dir/*.go &> /dev/null; then \
 		pushd . &> /dev/null ; \
 		cd $$dir ; \
-		$(shell which godep) go test ${INSIDECONTAINER} -test.parallel 3 -test.v -covermode=count -coverprofile=./profile.tmp ; \
+		$(shell which godep) go test ${INSIDECONTAINER} -test.parallel 5 -test.v -covermode=count -coverprofile=./profile.tmp ; \
 		ret=$$? ;\
 		if [ $$ret -ne 0 ]; then exit $$ret; fi ;\
 		popd &> /dev/null; \
-	        if [ -f $$dir/profile.tmp ]; then \
-		        cat $$dir/profile.tmp | tail -n +2 >> coverage.coverprofile ; \
+		if [ -f $$dir/profile.tmp ]; then \
+			cat $$dir/profile.tmp | tail -n +2 >> coverage.coverprofile ; \
 				rm $$dir/profile.tmp ; \
-            fi ; \
-        fi ; \
+	    fi ; \
+	fi ; \
 	done
 	@echo "Done running tests"
 
-check-local: 	check-format check-code run-tests 
+check-local:	check-format check-code run-tests
 
-install-deps:
-	apt-get update && apt-get -y install iptables
-	git clone https://github.com/golang/tools /go/src/golang.org/x/tools
-	go install golang.org/x/tools/cmd/vet
-	go install golang.org/x/tools/cmd/goimports
-	go install golang.org/x/tools/cmd/cover
-	go get github.com/tools/godep
-	go get github.com/golang/lint/golint
-	go get github.com/mattn/goveralls
+integration-tests: ./bin/dnet
+	@./test/integration/dnet/run-integration-tests.sh
+
+./bin/dnet:
+	make build
 
 coveralls:
 	-@goveralls -service circleci -coverprofile=coverage.coverprofile -repotoken $$COVERALLS_TOKEN
 
 # CircleCI's Docker fails when cleaning up using the --rm flag
-# The following target is a workaround for this
+# The following targets are a workaround for this
+circle-ci-cross: ${build_image}.created
+	@mkdir -p "bin"
+	@for platform in ${CROSS_PLATFORMS}; do \
+		EXTRA_ARGS="-e GOOS=$${platform%/*} -e GOARCH=$${platform##*/}" ; \
+		echo "$${platform}..." ; \
+		${cidocker} make cross-local ; \
+	done
 
-circle-ci:
-	@${cidocker} make install-deps check-local coveralls
+circle-ci-check: ${build_image}.created
+	@${cidocker} make check-local coveralls
+
+circle-ci-build: ${build_image}.created
+	@${cidocker} make build-local
+
+circle-ci: circle-ci-check circle-ci-build integration-tests

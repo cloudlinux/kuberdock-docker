@@ -19,14 +19,14 @@ aufs (advanced multi layered unification filesystem) is a Linux [filesystem](#fi
 Docker supports as a storage backend. It implements the
 [union mount](http://en.wikipedia.org/wiki/Union_mount) for Linux file systems.
 
+## Base image
+
+An image that has no parent is a **base image**.
+
 ## boot2docker
 
 [boot2docker](http://boot2docker.io/) is a lightweight Linux distribution made
-specifically to run Docker containers. It is a common choice for a [VM](#virtual-machine)
-to run Docker on Windows and Mac OS X.
-
-boot2docker can also refer to the boot2docker management tool on Windows and
-Mac OS X which manages the boot2docker VM.
+specifically to run Docker containers. The boot2docker management tool for Mac and Windows was deprecated and replaced by [`docker-machine`](#machine) which you can install with the Docker Toolbox.
 
 ## btrfs
 
@@ -132,13 +132,17 @@ namespaces, cgroups, capabilities, and filesystem access controls. It allows
 you to manage the lifecycle of the container performing additional operations
 after the container is created.
 
+## libnetwork
+
+libnetwork provides a native Go implementation for creating and managing container
+network namespaces and other network resources. It manage the networking lifecycle
+of the container performing additional operations after the container is created.
+
 ## link
 
-links provide an interface to connect Docker containers running on the same host
-to each other without exposing the hosts' network ports. When you set up a link,
-you create a conduit between a source container and a recipient container.
-The recipient can then access select data about the source. To create a link,
-you can use the `--link` flag.
+links provide a legacy interface to connect Docker containers running on the
+same host to each other without exposing the hosts' network ports. Use the
+Docker networks feature instead.
 
 ## Machine
 
@@ -149,7 +153,12 @@ installs Docker on them, then configures the Docker client to talk to them.
 
 *Also known as : docker-machine*
 
-## overlay
+## overlay network driver
+
+Overlay network driver provides out of the box multi-host network connectivity
+for docker containers in a cluster.
+
+## overlay storage driver
 
 OverlayFS is a [filesystem](#filesystem) service for Linux which implements a
 [union mount](http://en.wikipedia.org/wiki/Union_mount) for other file systems.
@@ -188,6 +197,11 @@ tags are how various images in a repository are distinguished from each other.
 
 *Note : This label is not related to the key=value labels set for docker daemon*
 
+## Toolbox
+
+Docker Toolbox is the installer for Mac and Windows users.
+
+
 ## Union file system
 
 Union file systems, or UnionFS, are file systems that operate by creating layers, making them
@@ -205,4 +219,3 @@ Compared to to containers, a Virtual Machine is heavier to run, provides more is
 gets its own set of resources and does minimal sharing.
 
 *Also known as : VM*
-

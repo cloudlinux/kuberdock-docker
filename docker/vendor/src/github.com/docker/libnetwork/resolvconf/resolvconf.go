@@ -10,6 +10,7 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/pkg/ioutils"
+	"github.com/docker/libnetwork/netutils"
 	"github.com/docker/libnetwork/resolvconf/dns"
 )
 
@@ -29,7 +30,10 @@ var (
 	localhostNSRegexp = regexp.MustCompile(`(?m)^nameserver\s+` + dns.IPLocalhost + `\s*\n*`)
 	nsIPv6Regexp      = regexp.MustCompile(`(?m)^nameserver\s+` + ipv6Address + `\s*\n*`)
 	nsRegexp          = regexp.MustCompile(`^\s*nameserver\s*((` + ipv4Address + `)|(` + ipv6Address + `))\s*$`)
+	nsIPv6Regexpmatch = regexp.MustCompile(`^\s*nameserver\s*((` + ipv6Address + `))\s*$`)
+	nsIPv4Regexpmatch = regexp.MustCompile(`^\s*nameserver\s*((` + ipv4Address + `))\s*$`)
 	searchRegexp      = regexp.MustCompile(`^\s*search\s*(([^\s]+\s*)*)$`)
+	optionsRegexp     = regexp.MustCompile(`^\s*options\s*(([^\s]+\s*)*)$`)
 )
 
 var lastModified struct {
@@ -38,46 +42,69 @@ var lastModified struct {
 	contents []byte
 }
 
-// Get returns the contents of /etc/resolv.conf
-func Get() ([]byte, error) {
+// File contains the resolv.conf content and its hash
+type File struct {
+	Content []byte
+	Hash    string
+}
+
+// Get returns the contents of /etc/resolv.conf and its hash
+func Get() (*File, error) {
 	resolv, err := ioutil.ReadFile("/etc/resolv.conf")
 	if err != nil {
 		return nil, err
 	}
-	return resolv, nil
+	hash, err := ioutils.HashData(bytes.NewReader(resolv))
+	if err != nil {
+		return nil, err
+	}
+	return &File{Content: resolv, Hash: hash}, nil
+}
+
+// GetSpecific returns the contents of the user specified resolv.conf file and its hash
+func GetSpecific(path string) (*File, error) {
+	resolv, err := ioutil.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	hash, err := ioutils.HashData(bytes.NewReader(resolv))
+	if err != nil {
+		return nil, err
+	}
+	return &File{Content: resolv, Hash: hash}, nil
 }
 
 // GetIfChanged retrieves the host /etc/resolv.conf file, checks against the last hash
 // and, if modified since last check, returns the bytes and new hash.
 // This feature is used by the resolv.conf updater for containers
-func GetIfChanged() ([]byte, string, error) {
+func GetIfChanged() (*File, error) {
 	lastModified.Lock()
 	defer lastModified.Unlock()
 
 	resolv, err := ioutil.ReadFile("/etc/resolv.conf")
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	newHash, err := ioutils.HashData(bytes.NewReader(resolv))
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if lastModified.sha256 != newHash {
 		lastModified.sha256 = newHash
 		lastModified.contents = resolv
-		return resolv, newHash, nil
+		return &File{Content: resolv, Hash: newHash}, nil
 	}
 	// nothing changed, so return no data
-	return nil, "", nil
+	return nil, nil
 }
 
 // GetLastModified retrieves the last used contents and hash of the host resolv.conf.
 // Used by containers updating on restart
-func GetLastModified() ([]byte, string) {
+func GetLastModified() *File {
 	lastModified.Lock()
 	defer lastModified.Unlock()
 
-	return lastModified.contents, lastModified.sha256
+	return &File{Content: lastModified.contents, Hash: lastModified.sha256}
 }
 
 // FilterResolvDNS cleans up the config in resolvConf.  It has two main jobs:
@@ -87,9 +114,7 @@ func GetLastModified() ([]byte, string) {
 // 2. Given the caller provides the enable/disable state of IPv6, the filter
 //    code will remove all IPv6 nameservers if it is not enabled for containers
 //
-// It returns a boolean to notify the caller if changes were made at all
-func FilterResolvDNS(resolvConf []byte, ipv6Enabled bool) ([]byte, bool) {
-	changed := false
+func FilterResolvDNS(resolvConf []byte, ipv6Enabled bool) (*File, error) {
 	cleanedResolvConf := localhostNSRegexp.ReplaceAll(resolvConf, []byte{})
 	// if IPv6 is not enabled, also clean out any IPv6 address nameserver
 	if !ipv6Enabled {
@@ -97,7 +122,7 @@ func FilterResolvDNS(resolvConf []byte, ipv6Enabled bool) ([]byte, bool) {
 	}
 	// if the resulting resolvConf has no more nameservers defined, add appropriate
 	// default DNS servers for IPv4 and (optionally) IPv6
-	if len(GetNameservers(cleanedResolvConf)) == 0 {
+	if len(GetNameservers(cleanedResolvConf, netutils.IP)) == 0 {
 		logrus.Infof("No non-localhost DNS nameservers are left in resolv.conf. Using default external servers : %v", defaultIPv4Dns)
 		dns := defaultIPv4Dns
 		if ipv6Enabled {
@@ -106,10 +131,11 @@ func FilterResolvDNS(resolvConf []byte, ipv6Enabled bool) ([]byte, bool) {
 		}
 		cleanedResolvConf = append(cleanedResolvConf, []byte("\n"+strings.Join(dns, "\n"))...)
 	}
-	if !bytes.Equal(resolvConf, cleanedResolvConf) {
-		changed = true
+	hash, err := ioutils.HashData(bytes.NewReader(cleanedResolvConf))
+	if err != nil {
+		return nil, err
 	}
-	return cleanedResolvConf, changed
+	return &File{Content: cleanedResolvConf, Hash: hash}, nil
 }
 
 // getLines parses input into lines and strips away comments.
@@ -128,10 +154,17 @@ func getLines(input []byte, commentMarker []byte) [][]byte {
 }
 
 // GetNameservers returns nameservers (if any) listed in /etc/resolv.conf
-func GetNameservers(resolvConf []byte) []string {
+func GetNameservers(resolvConf []byte, kind int) []string {
 	nameservers := []string{}
 	for _, line := range getLines(resolvConf, []byte("#")) {
-		var ns = nsRegexp.FindSubmatch(line)
+		var ns [][]byte
+		if kind == netutils.IP {
+			ns = nsRegexp.FindSubmatch(line)
+		} else if kind == netutils.IPv4 {
+			ns = nsIPv4Regexpmatch.FindSubmatch(line)
+		} else if kind == netutils.IPv6 {
+			ns = nsIPv6Regexpmatch.FindSubmatch(line)
+		}
 		if len(ns) > 0 {
 			nameservers = append(nameservers, string(ns[1]))
 		}
@@ -144,7 +177,7 @@ func GetNameservers(resolvConf []byte) []string {
 // This function's output is intended for net.ParseCIDR
 func GetNameserversAsCIDR(resolvConf []byte) []string {
 	nameservers := []string{}
-	for _, nameserver := range GetNameservers(resolvConf) {
+	for _, nameserver := range GetNameservers(resolvConf, netutils.IP) {
 		nameservers = append(nameservers, nameserver+"/32")
 	}
 	return nameservers
@@ -165,23 +198,50 @@ func GetSearchDomains(resolvConf []byte) []string {
 	return domains
 }
 
-// Build writes a configuration file to path containing a "nameserver" entry
-// for every element in dns, and a "search" entry for every element in
-// dnsSearch.
-func Build(path string, dns, dnsSearch []string) error {
-	content := bytes.NewBuffer(nil)
-	for _, dns := range dns {
-		if _, err := content.WriteString("nameserver " + dns + "\n"); err != nil {
-			return err
+// GetOptions returns options (if any) listed in /etc/resolv.conf
+// If more than one options line is encountered, only the contents of the last
+// one is returned.
+func GetOptions(resolvConf []byte) []string {
+	options := []string{}
+	for _, line := range getLines(resolvConf, []byte("#")) {
+		match := optionsRegexp.FindSubmatch(line)
+		if match == nil {
+			continue
 		}
+		options = strings.Fields(string(match[1]))
 	}
+	return options
+}
+
+// Build writes a configuration file to path containing a "nameserver" entry
+// for every element in dns, a "search" entry for every element in
+// dnsSearch, and an "options" entry for every element in dnsOptions.
+func Build(path string, dns, dnsSearch, dnsOptions []string) (*File, error) {
+	content := bytes.NewBuffer(nil)
 	if len(dnsSearch) > 0 {
 		if searchString := strings.Join(dnsSearch, " "); strings.Trim(searchString, " ") != "." {
 			if _, err := content.WriteString("search " + searchString + "\n"); err != nil {
-				return err
+				return nil, err
+			}
+		}
+	}
+	for _, dns := range dns {
+		if _, err := content.WriteString("nameserver " + dns + "\n"); err != nil {
+			return nil, err
+		}
+	}
+	if len(dnsOptions) > 0 {
+		if optsString := strings.Join(dnsOptions, " "); strings.Trim(optsString, " ") != "" {
+			if _, err := content.WriteString("options " + optsString + "\n"); err != nil {
+				return nil, err
 			}
 		}
 	}
 
-	return ioutil.WriteFile(path, content.Bytes(), 0644)
+	hash, err := ioutils.HashData(bytes.NewReader(content.Bytes()))
+	if err != nil {
+		return nil, err
+	}
+
+	return &File{Content: content.Bytes(), Hash: hash}, ioutil.WriteFile(path, content.Bytes(), 0644)
 }

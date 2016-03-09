@@ -1,79 +1,74 @@
 package client
 
 import (
-	"fmt"
-	"net/url"
-	"strings"
+	"errors"
+	"io"
 
 	Cli "github.com/docker/docker/cli"
+	"github.com/docker/docker/pkg/jsonmessage"
 	flag "github.com/docker/docker/pkg/mflag"
-	"github.com/docker/docker/pkg/parsers"
+	"github.com/docker/docker/reference"
 	"github.com/docker/docker/registry"
+	"github.com/docker/engine-api/client"
+	"github.com/docker/engine-api/types"
 )
-
-func (cli *DockerCli) confirmPush() bool {
-	const prompt = "Do you really want to push to public registry? [y/n]: "
-	answer := ""
-	fmt.Fprintln(cli.out, "")
-
-	for answer != "n" && answer != "y" {
-		fmt.Fprint(cli.out, prompt)
-		answer = strings.ToLower(strings.TrimSpace(readInput(cli.in, cli.out)))
-	}
-
-	if answer == "n" {
-		fmt.Fprintln(cli.out, "Nothing pushed.")
-	}
-
-	return answer == "y"
-}
 
 // CmdPush pushes an image or repository to the registry.
 //
 // Usage: docker push NAME[:TAG]
 func (cli *DockerCli) CmdPush(args ...string) error {
-	cmd := Cli.Subcmd("push", []string{"NAME[:TAG]"}, "Push an image or a repository to a registry", true)
-	force := cmd.Bool([]string{"f", "-force"}, false, "Push to public registry without confirmation")
+	cmd := Cli.Subcmd("push", []string{"NAME[:TAG]"}, Cli.DockerCommands["push"].Description, true)
 	addTrustedFlags(cmd, false)
 	cmd.Require(flag.Exact, 1)
 
 	cmd.ParseFlags(args, true)
 
-	remote, tag := parsers.ParseRepositoryTag(cmd.Arg(0))
-
-	// Resolve the Repository name from fqn to RepositoryInfo
-	repoInfo, err := registry.ParseRepositoryInfo(remote)
+	ref, err := reference.ParseNamed(cmd.Arg(0))
 	if err != nil {
 		return err
 	}
 
-	// Resolve the Auth config relevant for this server
-	authConfig := registry.ResolveAuthConfig(cli.configFile, repoInfo.Index)
-
-	if isTrusted() {
-		return cli.trustedPush(repoInfo, tag, authConfig)
+	var tag string
+	switch x := ref.(type) {
+	case reference.Canonical:
+		return errors.New("cannot push a digest reference")
+	case reference.NamedTagged:
+		tag = x.Tag()
 	}
 
-	v := url.Values{}
-	v.Set("tag", tag)
-	if *force {
-		v.Set("force", "1")
-	}
-
-	push := func() error {
-		_, _, err = cli.clientRequestAttemptLogin("POST", "/images/"+remote+"/push?"+v.Encode(), nil, cli.out, repoInfo.Index, "push")
+	// Resolve the Repository name from fqn to RepositoryInfo
+	repoInfo, err := registry.ParseRepositoryInfo(ref)
+	if err != nil {
 		return err
 	}
-	if err = push(); err != nil {
-		if v.Get("force") != "1" && strings.Contains(err.Error(), "Status 403") {
-			if !cli.confirmPush() {
-				return nil
-			}
-			v.Set("force", "1")
-			if err = push(); err == nil {
-				return nil
-			}
-		}
+	// Resolve the Auth config relevant for this server
+	authConfig := cli.resolveAuthConfig(cli.configFile.AuthConfigs, repoInfo.Index)
+
+	requestPrivilege := cli.registryAuthenticationPrivilegedFunc(repoInfo.Index, "push")
+	if isTrusted() {
+		return cli.trustedPush(repoInfo, tag, authConfig, requestPrivilege)
 	}
-	return err
+
+	responseBody, err := cli.imagePushPrivileged(authConfig, ref.Name(), tag, requestPrivilege)
+	if err != nil {
+		return err
+	}
+
+	defer responseBody.Close()
+
+	return jsonmessage.DisplayJSONMessagesStream(responseBody, cli.out, cli.outFd, cli.isTerminalOut, nil)
+}
+
+func (cli *DockerCli) imagePushPrivileged(authConfig types.AuthConfig, imageID, tag string, requestPrivilege client.RequestPrivilegeFunc) (io.ReadCloser, error) {
+	encodedAuth, err := encodeAuthToBase64(authConfig)
+	if err != nil {
+		return nil, err
+	}
+	options := types.ImagePushOptions{
+		ImageID:      imageID,
+		Tag:          tag,
+		RegistryAuth: encodedAuth,
+	}
+
+	return cli.client.ImagePush(options, requestPrivilege)
 }

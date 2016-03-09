@@ -16,14 +16,14 @@ const (
 	shimDLLName = "vmcompute.dll"
 
 	// Container related functions in the shim DLL
-	procCreateComputeSystem             = "CreateComputeSystem"
-	procStartComputeSystem              = "StartComputeSystem"
-	procCreateProcessInComputeSystem    = "CreateProcessInComputeSystem"
-	procWaitForProcessInComputeSystem   = "WaitForProcessInComputeSystem"
-	procShutdownComputeSystem           = "ShutdownComputeSystem"
-	procTerminateComputeSystem          = "TerminateComputeSystem"
-	procTerminateProcessInComputeSystem = "TerminateProcessInComputeSystem"
-	procResizeConsoleInComputeSystem    = "ResizeConsoleInComputeSystem"
+	procCreateComputeSystem                        = "CreateComputeSystem"
+	procStartComputeSystem                         = "StartComputeSystem"
+	procCreateProcessWithStdHandlesInComputeSystem = "CreateProcessWithStdHandlesInComputeSystem"
+	procWaitForProcessInComputeSystem              = "WaitForProcessInComputeSystem"
+	procShutdownComputeSystem                      = "ShutdownComputeSystem"
+	procTerminateComputeSystem                     = "TerminateComputeSystem"
+	procTerminateProcessInComputeSystem            = "TerminateProcessInComputeSystem"
+	procResizeConsoleInComputeSystem               = "ResizeConsoleInComputeSystem"
 
 	// Storage related functions in the shim DLL
 	procLayerExists         = "LayerExists"
@@ -39,12 +39,26 @@ const (
 	procExportLayer         = "ExportLayer"
 	procImportLayer         = "ImportLayer"
 	procGetSharedBaseImages = "GetBaseImages"
+	procNameToGuid          = "NameToGuid"
 
 	// Name of the standard OLE dll
 	oleDLLName = "Ole32.dll"
 
 	// Utility functions
 	procCoTaskMemFree = "CoTaskMemFree"
+
+	// Specific user-visible exit codes
+	WaitErrExecFailed = 32767
+
+	// Known Win32 RC values which should be trapped
+	Win32PipeHasBeenEnded                 = 0x8007006d // WaitForProcessInComputeSystem: The pipe has been ended
+	Win32SystemShutdownIsInProgress       = 0x8007045B // ShutdownComputeSystem: A system shutdown is in progress
+	Win32SpecifiedPathInvalid             = 0x800700A1 // ShutdownComputeSystem: The specified path is invalid
+	Win32SystemCannotFindThePathSpecified = 0x80070003 // ShutdownComputeSystem: The system cannot find the path specified
+	Win32InvalidArgument                  = 0x80072726 // CreateProcessInComputeSystem: An invalid argument was supplied
+
+	// Timeout on wait calls
+	TimeoutInfinite = 0xFFFFFFFF
 )
 
 // loadAndFindFromDll finds a procedure in the given DLL. Note we do NOT do lazy loading as
@@ -52,8 +66,6 @@ const (
 // if a function can't be found. By explicitly loading, we can control error
 // handling gracefully without the daemon terminating.
 func loadAndFindFromDll(dllName, procedure string) (dll *syscall.DLL, proc *syscall.Proc, err error) {
-	logrus.Debugf("hcsshim::loadAndFindFromDll %s %s", dllName, procedure)
-
 	dll, err = syscall.LoadDLL(dllName)
 	if err != nil {
 		err = fmt.Errorf("Failed to load %s - error %s", dllName, err)

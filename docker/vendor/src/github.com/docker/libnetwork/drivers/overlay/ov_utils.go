@@ -4,12 +4,12 @@ import (
 	"fmt"
 
 	"github.com/docker/libnetwork/netutils"
-	"github.com/docker/libnetwork/sandbox"
-	"github.com/docker/libnetwork/types"
+	"github.com/docker/libnetwork/osl"
 	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netlink/nl"
 )
 
-func validateID(nid, eid types.UUID) error {
+func validateID(nid, eid string) error {
 	if nid == "" {
 		return fmt.Errorf("invalid network id")
 	}
@@ -22,7 +22,7 @@ func validateID(nid, eid types.UUID) error {
 }
 
 func createVethPair() (string, string, error) {
-	defer sandbox.InitOSContext()()
+	defer osl.InitOSContext()()
 
 	// Generate a name for what will be the host side pipe interface
 	name1, err := netutils.GenerateIfaceName(vethPrefix, vethLen)
@@ -47,42 +47,59 @@ func createVethPair() (string, string, error) {
 	return name1, name2, nil
 }
 
-func createVxlan(vni uint32) (string, error) {
-	defer sandbox.InitOSContext()()
-
-	name, err := netutils.GenerateIfaceName("vxlan", 7)
-	if err != nil {
-		return "", fmt.Errorf("error generating vxlan name: %v", err)
-	}
+func createVxlan(name string, vni uint32) error {
+	defer osl.InitOSContext()()
 
 	vxlan := &netlink.Vxlan{
 		LinkAttrs: netlink.LinkAttrs{Name: name},
 		VxlanId:   int(vni),
 		Learning:  true,
-		Port:      vxlanPort,
+		Port:      int(nl.Swap16(vxlanPort)), //network endian order
 		Proxy:     true,
 		L3miss:    true,
 		L2miss:    true,
 	}
 
 	if err := netlink.LinkAdd(vxlan); err != nil {
-		return "", fmt.Errorf("error creating vxlan interface: %v", err)
-	}
-
-	return name, nil
-}
-
-func deleteVxlan(name string) error {
-	defer sandbox.InitOSContext()()
-
-	link, err := netlink.LinkByName(name)
-	if err != nil {
-		return fmt.Errorf("failed to find vxlan interface with name %s: %v", name, err)
-	}
-
-	if err := netlink.LinkDel(link); err != nil {
-		return fmt.Errorf("error deleting vxlan interface: %v", err)
+		return fmt.Errorf("error creating vxlan interface: %v", err)
 	}
 
 	return nil
+}
+
+func deleteInterface(name string) error {
+	defer osl.InitOSContext()()
+
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		return fmt.Errorf("failed to find interface with name %s: %v", name, err)
+	}
+
+	if err := netlink.LinkDel(link); err != nil {
+		return fmt.Errorf("error deleting interface with name %s: %v", name, err)
+	}
+
+	return nil
+}
+
+func deleteVxlanByVNI(vni uint32) error {
+	defer osl.InitOSContext()()
+
+	links, err := netlink.LinkList()
+	if err != nil {
+		return fmt.Errorf("failed to list interfaces while deleting vxlan interface by vni: %v", err)
+	}
+
+	for _, l := range links {
+		if l.Type() == "vxlan" && l.(*netlink.Vxlan).VxlanId == int(vni) {
+			err = netlink.LinkDel(l)
+			if err != nil {
+				return fmt.Errorf("error deleting vxlan interface with id %d: %v", vni, err)
+			}
+
+			return nil
+		}
+	}
+
+	return fmt.Errorf("could not find a vxlan interface to delete with id %d", vni)
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/docker/distribution/context"
 	"github.com/docker/distribution/digest"
+	"github.com/docker/distribution/reference"
 )
 
 var (
@@ -27,9 +28,6 @@ var (
 	// ErrBlobInvalidLength returned when the blob has an expected length on
 	// commit, meaning mismatched with the descriptor or an invalid value.
 	ErrBlobInvalidLength = errors.New("blob invalid length")
-
-	// ErrUnsupported returned when an unsupported operation is attempted
-	ErrUnsupported = errors.New("unsupported operation")
 )
 
 // ErrBlobInvalidDigest returned when digest check fails.
@@ -41,6 +39,18 @@ type ErrBlobInvalidDigest struct {
 func (err ErrBlobInvalidDigest) Error() string {
 	return fmt.Sprintf("invalid digest for referenced layer: %v, %v",
 		err.Digest, err.Reason)
+}
+
+// ErrBlobMounted returned when a blob is mounted from another repository
+// instead of initiating an upload session.
+type ErrBlobMounted struct {
+	From       reference.Canonical
+	Descriptor Descriptor
+}
+
+func (err ErrBlobMounted) Error() string {
+	return fmt.Sprintf("blob mounted from: %v to: %v",
+		err.From, err.Descriptor)
 }
 
 // Descriptor describes targeted content. Used in conjunction with a blob
@@ -62,6 +72,15 @@ type Descriptor struct {
 	// NOTE: Before adding a field here, please ensure that all
 	// other options have been exhausted. Much of the type relationships
 	// depend on the simplicity of this type.
+}
+
+// Descriptor returns the descriptor, to make it satisfy the Describable
+// interface. Note that implementations of Describable are generally objects
+// which can be described, not simply descriptors; this exception is in place
+// to make it more convenient to pass actual descriptors to functions that
+// expect Describable objects.
+func (d Descriptor) Descriptor() Descriptor {
+	return d
 }
 
 // BlobStatter makes blob descriptors available by digest. The service may
@@ -145,10 +164,19 @@ type BlobIngester interface {
 	// returned handle can be written to and later resumed using an opaque
 	// identifier. With this approach, one can Close and Resume a BlobWriter
 	// multiple times until the BlobWriter is committed or cancelled.
-	Create(ctx context.Context) (BlobWriter, error)
+	Create(ctx context.Context, options ...BlobCreateOption) (BlobWriter, error)
 
 	// Resume attempts to resume a write to a blob, identified by an id.
 	Resume(ctx context.Context, id string) (BlobWriter, error)
+}
+
+// BlobCreateOption is a general extensible function argument for blob creation
+// methods. A BlobIngester may choose to honor any or none of the given
+// BlobCreateOptions, which can be specific to the implementation of the
+// BlobIngester receiving them.
+// TODO (brianbland): unify this with ManifestServiceOption in the future
+type BlobCreateOption interface {
+	Apply(interface{}) error
 }
 
 // BlobWriter provides a handle for inserting data into a blob store.
@@ -183,6 +211,9 @@ type BlobWriter interface {
 	// result in a no-op. This allows use of Cancel in a defer statement,
 	// increasing the assurance that it is correctly called.
 	Cancel(ctx context.Context) error
+
+	// Get a reader to the blob being written by this BlobWriter
+	Reader() (io.ReadCloser, error)
 }
 
 // BlobService combines the operations to access, read and write blobs. This

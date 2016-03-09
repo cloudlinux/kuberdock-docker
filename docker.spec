@@ -9,7 +9,7 @@
 %global project docker
 %global repo %{project}
 %global common_path %{provider}.%{provider_tld}/%{project}
-%global d_version 1.8.2
+%global d_version 1.10.2
 
 %global import_path %{common_path}/%{repo}
 %global import_path_libcontainer %{common_path}/libcontainer
@@ -51,7 +51,7 @@
 Name: %{repo}
 Epoch: 1
 Version: %{d_version}
-Release: 10%{?dist}
+Release: 1%{?dist}
 Summary: Automates deployment of containerized applications
 License: ASL 2.0
 URL: https://%{import_path}
@@ -413,6 +413,9 @@ fi
 %{_datadir}/selinux/*
 
 %changelog
+* Wed Mar 09 2016 Sergey Fokin <sfokin@cloudlinux.com> - 1.10.2-1
+- update to 1.10.2
+
 * Thu Dec 10 2015 Johnny Hughes <johnny@centos.org> - 1.8.2-10
 - Manual CentOS debreanding
 

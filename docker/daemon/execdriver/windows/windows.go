@@ -8,9 +8,10 @@ import (
 	"sync"
 
 	"github.com/Sirupsen/logrus"
-	"github.com/docker/docker/autogen/dockerversion"
 	"github.com/docker/docker/daemon/execdriver"
+	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/pkg/parsers"
+	"github.com/docker/engine-api/types/container"
 )
 
 // This is a daemon development variable only and should not be
@@ -18,29 +19,40 @@ import (
 var dummyMode bool
 
 // This allows the daemon to terminate containers rather than shutdown
-var terminateMode bool
+// This allows the daemon to force kill (HCS terminate) rather than shutdown
+var forceKill bool
 
+// DefaultIsolation allows users to specify a default isolation mode for
+// when running a container on Windows. For example docker daemon -D
+// --exec-opt isolation=hyperv will cause Windows to always run containers
+// as Hyper-V containers unless otherwise specified.
+var DefaultIsolation container.IsolationLevel = "process"
+
+// Define name and version for windows
 var (
 	DriverName = "Windows 1854"
-	Version    = dockerversion.VERSION + " " + dockerversion.GITCOMMIT
+	Version    = dockerversion.Version + " " + dockerversion.GitCommit
 )
 
 type activeContainer struct {
 	command *execdriver.Command
 }
 
-type driver struct {
+// Driver contains all information for windows driver,
+// it implements execdriver.Driver
+type Driver struct {
 	root             string
-	initPath         string
 	activeContainers map[string]*activeContainer
 	sync.Mutex
 }
 
-func (d *driver) Name() string {
-	return fmt.Sprintf("%s %s", DriverName, Version)
+// Name implements the exec driver Driver interface.
+func (d *Driver) Name() string {
+	return fmt.Sprintf("\n Name: %s\n Build: %s \n Default Isolation: %s", DriverName, Version, DefaultIsolation)
 }
 
-func NewDriver(root, initPath string, options []string) (*driver, error) {
+// NewDriver returns a new windows driver, called from NewDriver of execdriver.
+func NewDriver(root string, options []string) (*Driver, error) {
 
 	for _, option := range options {
 		key, val, err := parsers.ParseKeyValueOpt(option)
@@ -57,21 +69,28 @@ func NewDriver(root, initPath string, options []string) (*driver, error) {
 				logrus.Warn("Using dummy mode in Windows exec driver. This is for development use only!")
 			}
 
-		case "terminate":
+		case "forcekill":
 			switch val {
 			case "1":
-				terminateMode = true
-				logrus.Warn("Using terminate mode in Windows exec driver. This is for testing purposes only.")
+				forceKill = true
+				logrus.Warn("Using force kill mode in Windows exec driver. This is for testing purposes only.")
 			}
 
+		case "isolation":
+			if !container.IsolationLevel(val).IsValid() {
+				return nil, fmt.Errorf("Unrecognised exec driver option 'isolation':'%s'", val)
+			}
+			if container.IsolationLevel(val).IsHyperV() {
+				DefaultIsolation = "hyperv"
+			}
+			logrus.Infof("Windows default isolation level: '%s'", val)
 		default:
 			return nil, fmt.Errorf("Unrecognised exec driver option %s\n", key)
 		}
 	}
 
-	return &driver{
+	return &Driver{
 		root:             root,
-		initPath:         initPath,
 		activeContainers: make(map[string]*activeContainer),
 	}, nil
 }

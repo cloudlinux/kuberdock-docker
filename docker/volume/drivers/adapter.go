@@ -1,6 +1,9 @@
 package volumedrivers
 
-import "github.com/docker/docker/volume"
+import (
+	"github.com/docker/docker/pkg/plugins"
+	"github.com/docker/docker/volume"
+)
 
 type volumeDriverAdapter struct {
 	name  string
@@ -11,8 +14,21 @@ func (a *volumeDriverAdapter) Name() string {
 	return a.name
 }
 
-func (a *volumeDriverAdapter) Create(name string) (volume.Volume, error) {
-	err := a.proxy.Create(name)
+func (a *volumeDriverAdapter) Create(name string, opts map[string]string) (volume.Volume, error) {
+	// First try a Get. For drivers that support Get this will return any
+	// existing volume.
+	v, err := a.proxy.Get(name)
+	if v != nil {
+		return &volumeAdapter{
+			proxy:      a.proxy,
+			name:       v.Name,
+			driverName: a.Name(),
+			eMount:     v.Mountpoint,
+		}, nil
+	}
+
+	// Driver didn't support Get or volume didn't exist. Perform Create.
+	err = a.proxy.Create(name, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -26,11 +42,52 @@ func (a *volumeDriverAdapter) Remove(v volume.Volume) error {
 	return a.proxy.Remove(v.Name())
 }
 
+func (a *volumeDriverAdapter) List() ([]volume.Volume, error) {
+	ls, err := a.proxy.List()
+	if err != nil {
+		return nil, err
+	}
+
+	var out []volume.Volume
+	for _, vp := range ls {
+		out = append(out, &volumeAdapter{
+			proxy:      a.proxy,
+			name:       vp.Name,
+			driverName: a.name,
+			eMount:     vp.Mountpoint,
+		})
+	}
+	return out, nil
+}
+
+func (a *volumeDriverAdapter) Get(name string) (volume.Volume, error) {
+	v, err := a.proxy.Get(name)
+	if err != nil {
+		// TODO: remove this hack. Allows back compat with volume drivers that don't support this call
+		if !plugins.IsNotFound(err) {
+			return nil, err
+		}
+		return a.Create(name, nil)
+	}
+
+	return &volumeAdapter{
+		proxy:      a.proxy,
+		name:       v.Name,
+		driverName: a.Name(),
+		eMount:     v.Mountpoint,
+	}, nil
+}
+
 type volumeAdapter struct {
 	proxy      *volumeDriverProxy
 	name       string
 	driverName string
 	eMount     string // ephemeral host volume path
+}
+
+type proxyVolume struct {
+	Name       string
+	Mountpoint string
 }
 
 func (a *volumeAdapter) Name() string {

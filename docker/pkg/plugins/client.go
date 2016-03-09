@@ -3,22 +3,23 @@ package plugins
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/Sirupsen/logrus"
-	"github.com/docker/docker/pkg/sockets"
-	"github.com/docker/docker/pkg/tlsconfig"
+	"github.com/docker/go-connections/sockets"
+	"github.com/docker/go-connections/tlsconfig"
 )
 
 const (
-	versionMimetype = "application/vnd.docker.plugins.v1+json"
+	versionMimetype = "application/vnd.docker.plugins.v1.2+json"
 	defaultTimeOut  = 30
 )
 
+// NewClient creates a new plugin client (http).
 func NewClient(addr string, tlsConfig tlsconfig.Options) (*Client, error) {
 	tr := &http.Transport{}
 
@@ -30,30 +31,73 @@ func NewClient(addr string, tlsConfig tlsconfig.Options) (*Client, error) {
 
 	protoAndAddr := strings.Split(addr, "://")
 	sockets.ConfigureTCPTransport(tr, protoAndAddr[0], protoAndAddr[1])
-	return &Client{&http.Client{Transport: tr}, protoAndAddr[1]}, nil
-}
 
-type Client struct {
-	http *http.Client
-	addr string
-}
-
-func (c *Client) Call(serviceMethod string, args interface{}, ret interface{}) error {
-	return c.callWithRetry(serviceMethod, args, ret, true)
-}
-
-func (c *Client) callWithRetry(serviceMethod string, args interface{}, ret interface{}, retry bool) error {
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(args); err != nil {
-		return err
+	scheme := protoAndAddr[0]
+	if scheme != "https" {
+		scheme = "http"
 	}
+	return &Client{&http.Client{Transport: tr}, scheme, protoAndAddr[1]}, nil
+}
 
-	req, err := http.NewRequest("POST", "/"+serviceMethod, &buf)
+// Client represents a plugin client.
+type Client struct {
+	http   *http.Client // http client to use
+	scheme string       // scheme protocol of the plugin
+	addr   string       // http address of the plugin
+}
+
+// Call calls the specified method with the specified arguments for the plugin.
+// It will retry for 30 seconds if a failure occurs when calling.
+func (c *Client) Call(serviceMethod string, args interface{}, ret interface{}) error {
+	var buf bytes.Buffer
+	if args != nil {
+		if err := json.NewEncoder(&buf).Encode(args); err != nil {
+			return err
+		}
+	}
+	body, err := c.callWithRetry(serviceMethod, &buf, true)
 	if err != nil {
 		return err
 	}
+	defer body.Close()
+	if ret != nil {
+		if err := json.NewDecoder(body).Decode(&ret); err != nil {
+			logrus.Errorf("%s: error reading plugin resp: %v", serviceMethod, err)
+			return err
+		}
+	}
+	return nil
+}
+
+// Stream calls the specified method with the specified arguments for the plugin and returns the response body
+func (c *Client) Stream(serviceMethod string, args interface{}) (io.ReadCloser, error) {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(args); err != nil {
+		return nil, err
+	}
+	return c.callWithRetry(serviceMethod, &buf, true)
+}
+
+// SendFile calls the specified method, and passes through the IO stream
+func (c *Client) SendFile(serviceMethod string, data io.Reader, ret interface{}) error {
+	body, err := c.callWithRetry(serviceMethod, data, true)
+	if err != nil {
+		return err
+	}
+	if err := json.NewDecoder(body).Decode(&ret); err != nil {
+		logrus.Errorf("%s: error reading plugin resp: %v", serviceMethod, err)
+		return err
+	}
+	return nil
+}
+
+func (c *Client) callWithRetry(serviceMethod string, data io.Reader, retry bool) (io.ReadCloser, error) {
+	req, err := http.NewRequest("POST", "/"+serviceMethod, data)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Add("Accept", versionMimetype)
-	req.URL.Scheme = "http"
+	req.URL.Scheme = c.scheme
 	req.URL.Host = c.addr
 
 	var retries int
@@ -63,12 +107,12 @@ func (c *Client) callWithRetry(serviceMethod string, args interface{}, ret inter
 		resp, err := c.http.Do(req)
 		if err != nil {
 			if !retry {
-				return err
+				return nil, err
 			}
 
 			timeOff := backoff(retries)
 			if abort(start, timeOff) {
-				return err
+				return nil, err
 			}
 			retries++
 			logrus.Warnf("Unable to connect to plugin: %s, retrying in %v", c.addr, timeOff)
@@ -76,16 +120,28 @@ func (c *Client) callWithRetry(serviceMethod string, args interface{}, ret inter
 			continue
 		}
 
-		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			remoteErr, err := ioutil.ReadAll(resp.Body)
+			b, err := ioutil.ReadAll(resp.Body)
 			if err != nil {
-				return fmt.Errorf("Plugin Error: %s", err)
+				return nil, &statusError{resp.StatusCode, serviceMethod, err.Error()}
 			}
-			return fmt.Errorf("Plugin Error: %s", remoteErr)
-		}
 
-		return json.NewDecoder(resp.Body).Decode(&ret)
+			// Plugins' Response(s) should have an Err field indicating what went
+			// wrong. Try to unmarshal into ResponseErr. Otherwise fallback to just
+			// return the string(body)
+			type responseErr struct {
+				Err string
+			}
+			remoteErr := responseErr{}
+			if err := json.Unmarshal(b, &remoteErr); err == nil {
+				if remoteErr.Err != "" {
+					return nil, &statusError{resp.StatusCode, serviceMethod, remoteErr.Err}
+				}
+			}
+			// old way...
+			return nil, &statusError{resp.StatusCode, serviceMethod, string(b)}
+		}
+		return resp.Body, nil
 	}
 }
 

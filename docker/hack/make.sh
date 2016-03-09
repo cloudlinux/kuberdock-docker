@@ -11,8 +11,8 @@ set -e
 # - The VERSION file, at the root of the repository, should exist, and
 #   will be used as Docker binary version and package version.
 # - The hash of the git commit will also be included in the Docker binary,
-#   with the suffix -dirty if the repository isn't clean.
-# - The script is intented to be run inside the docker container specified
+#   with the suffix -unsupported if the repository isn't clean.
+# - The script is intended to be run inside the docker container specified
 #   in the Dockerfile at the root of the source. In other words:
 #   DO NOT CALL THIS SCRIPT DIRECTLY.
 # - The right way to call this script is to invoke "make" from
@@ -51,28 +51,31 @@ DEFAULT_BUNDLES=(
 	validate-test
 	validate-toml
 	validate-vet
+	validate-vendor
 
 	binary
+	dynbinary
 
 	test-unit
 	test-integration-cli
 	test-docker-py
 
-	dynbinary
-
 	cover
 	cross
 	tgz
-	ubuntu
 )
 
 VERSION=$(< ./VERSION)
 if command -v git &> /dev/null && git rev-parse &> /dev/null; then
 	GITCOMMIT=$(git rev-parse --short HEAD)
 	if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-		GITCOMMIT="$GITCOMMIT-dirty"
+		GITCOMMIT="$GITCOMMIT-unsupported"
 	fi
-	BUILDTIME=$(date -u)
+	! BUILDTIME=$(date --rfc-3339 ns | sed -e 's/ /T/') &> /dev/null
+	if [ -z $BUILDTIME ]; then
+		# If using bash 3.1 which doesn't support --rfc-3389, eg Windows CI
+		BUILDTIME=$(date -u)
+	fi
 elif [ "$DOCKER_GITCOMMIT" ]; then
 	GITCOMMIT="$DOCKER_GITCOMMIT"
 else
@@ -99,21 +102,20 @@ fi
 if [ "$DOCKER_EXPERIMENTAL" ]; then
 	echo >&2 '# WARNING! DOCKER_EXPERIMENTAL is set: building experimental features'
 	echo >&2
-	DOCKER_BUILDTAGS+=" experimental"
+	DOCKER_BUILDTAGS+=" experimental pkcs11"
 fi
 
 if [ -z "$DOCKER_CLIENTONLY" ]; then
 	DOCKER_BUILDTAGS+=" daemon"
-fi
-
-if [ "$DOCKER_EXECDRIVER" = 'lxc' ]; then
-	DOCKER_BUILDTAGS+=' test_no_exec'
+	if pkg-config libsystemd-journal 2> /dev/null ; then
+		DOCKER_BUILDTAGS+=" journald"
+	fi
 fi
 
 # test whether "btrfs/version.h" exists and apply btrfs_noversion appropriately
 if \
 	command -v gcc &> /dev/null \
-	&& ! gcc -E - &> /dev/null <<<'#include <btrfs/version.h>' \
+	&& ! gcc -E - -o /dev/null &> /dev/null <<<'#include <btrfs/version.h>' \
 ; then
 	DOCKER_BUILDTAGS+=' btrfs_noversion'
 fi
@@ -122,7 +124,7 @@ fi
 # functionality.
 if \
 	command -v gcc &> /dev/null \
-	&& ! ( echo -e  '#include <libdevmapper.h>\nint main() { dm_task_deferred_remove(NULL); }'| gcc -ldevmapper -xc - &> /dev/null ) \
+	&& ! ( echo -e  '#include <libdevmapper.h>\nint main() { dm_task_deferred_remove(NULL); }'| gcc -ldevmapper -xc - -o /dev/null &> /dev/null ) \
 ; then
        DOCKER_BUILDTAGS+=' libdm_no_deferred_remove'
 fi
@@ -135,27 +137,20 @@ if [ -z "$DOCKER_DEBUG" ]; then
 	LDFLAGS='-w'
 fi
 
-LDFLAGS_STATIC='-linkmode external'
-# Cgo -H windows is incompatible with -linkmode external.
-if [ "$(go env GOOS)" == 'windows' ]; then
-	LDFLAGS_STATIC=''
-fi
+LDFLAGS_STATIC=''
 EXTLDFLAGS_STATIC='-static'
 # ORIG_BUILDFLAGS is necessary for the cross target which cannot always build
 # with options like -race.
-ORIG_BUILDFLAGS=( -a -tags "netgo static_build $DOCKER_BUILDTAGS" -installsuffix netgo )
+ORIG_BUILDFLAGS=( -a -tags "autogen netgo static_build sqlite_omit_load_extension $DOCKER_BUILDTAGS" -installsuffix netgo )
 # see https://github.com/golang/go/issues/9369#issuecomment-69864440 for why -installsuffix is necessary here
 BUILDFLAGS=( $BUILDFLAGS "${ORIG_BUILDFLAGS[@]}" )
 # Test timeout.
-: ${TIMEOUT:=60m}
+: ${TIMEOUT:=120m}
 TESTFLAGS+=" -test.timeout=${TIMEOUT}"
 
-# A few more flags that are specific just to building a completely-static binary (see hack/make/binary)
-# PLEASE do not use these anywhere else.
-EXTLDFLAGS_STATIC_DOCKER="$EXTLDFLAGS_STATIC -lpthread -Wl,--unresolved-symbols=ignore-in-object-files"
 LDFLAGS_STATIC_DOCKER="
 	$LDFLAGS_STATIC
-	-extldflags \"$EXTLDFLAGS_STATIC_DOCKER\"
+	-extldflags \"$EXTLDFLAGS_STATIC\"
 "
 
 if [ "$(uname -s)" = 'FreeBSD' ]; then
@@ -216,10 +211,11 @@ test_env() {
 	# use "env -i" to tightly control the environment variables that bleed into the tests
 	env -i \
 		DEST="$DEST" \
-		DOCKER_EXECDRIVER="$DOCKER_EXECDRIVER" \
 		DOCKER_GRAPHDRIVER="$DOCKER_GRAPHDRIVER" \
 		DOCKER_USERLANDPROXY="$DOCKER_USERLANDPROXY" \
 		DOCKER_HOST="$DOCKER_HOST" \
+		DOCKER_REMAP_ROOT="$DOCKER_REMAP_ROOT" \
+		DOCKER_REMOTE_DAEMON="$DOCKER_REMOTE_DAEMON" \
 		GOPATH="$GOPATH" \
 		HOME="$ABS_DEST/fake-HOME" \
 		PATH="$PATH" \
@@ -233,25 +229,6 @@ binary_extension() {
 	if [ "$(go env GOOS)" = 'windows' ]; then
 		echo -n '.exe'
 	fi
-}
-
-# This helper function walks the current directory looking for directories
-# holding certain files ($1 parameter), and prints their paths on standard
-# output, one per line.
-find_dirs() {
-	find . -not \( \
-		\( \
-			-path './vendor/*' \
-			-o -path './integration-cli/*' \
-			-o -path './contrib/*' \
-			-o -path './pkg/mflag/example/*' \
-			-o -path './.git/*' \
-			-o -path './bundles/*' \
-			-o -path './docs/*' \
-			-o -path './pkg/libcontainer/nsinit/*' \
-		\) \
-		-prune \
-	\) -name "$1" -print0 | xargs -0n1 dirname | sort -u
 }
 
 hash_files() {
@@ -285,7 +262,7 @@ main() {
 	# We want this to fail if the bundles already exist and cannot be removed.
 	# This is to avoid mixing bundles from different versions of the code.
 	mkdir -p bundles
-	if [ -e "bundles/$VERSION" ]; then
+	if [ -e "bundles/$VERSION" ] && [ -z "$KEEPBUNDLE" ]; then
 		echo "bundles/$VERSION already exists. Removing."
 		rm -fr "bundles/$VERSION" && mkdir "bundles/$VERSION" || exit 1
 		echo

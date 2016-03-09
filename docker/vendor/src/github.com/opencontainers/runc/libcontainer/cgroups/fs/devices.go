@@ -10,7 +10,11 @@ import (
 type DevicesGroup struct {
 }
 
-func (s *DevicesGroup) Apply(d *data) error {
+func (s *DevicesGroup) Name() string {
+	return "devices"
+}
+
+func (s *DevicesGroup) Apply(d *cgroupData) error {
 	dir, err := d.join("devices")
 	if err != nil {
 		// We will return error even it's `not found` error, devices
@@ -18,7 +22,7 @@ func (s *DevicesGroup) Apply(d *data) error {
 		return err
 	}
 
-	if err := s.Set(dir, d.c); err != nil {
+	if err := s.Set(dir, d.config); err != nil {
 		return err
 	}
 
@@ -26,12 +30,12 @@ func (s *DevicesGroup) Apply(d *data) error {
 }
 
 func (s *DevicesGroup) Set(path string, cgroup *configs.Cgroup) error {
-	if !cgroup.AllowAllDevices {
+	if !cgroup.Resources.AllowAllDevices {
 		if err := writeFile(path, "devices.deny", "a"); err != nil {
 			return err
 		}
 
-		for _, dev := range cgroup.AllowedDevices {
+		for _, dev := range cgroup.Resources.AllowedDevices {
 			if err := writeFile(path, "devices.allow", dev.CgroupString()); err != nil {
 				return err
 			}
@@ -43,7 +47,7 @@ func (s *DevicesGroup) Set(path string, cgroup *configs.Cgroup) error {
 		return err
 	}
 
-	for _, dev := range cgroup.DeniedDevices {
+	for _, dev := range cgroup.Resources.DeniedDevices {
 		if err := writeFile(path, "devices.deny", dev.CgroupString()); err != nil {
 			return err
 		}
@@ -52,7 +56,7 @@ func (s *DevicesGroup) Set(path string, cgroup *configs.Cgroup) error {
 	return nil
 }
 
-func (s *DevicesGroup) Remove(d *data) error {
+func (s *DevicesGroup) Remove(d *cgroupData) error {
 	return removePath(d.path("devices"))
 }
 

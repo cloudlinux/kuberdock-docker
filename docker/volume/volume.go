@@ -1,16 +1,34 @@
 package volume
 
-const DefaultDriverName = "local"
+import (
+	"os"
+	"runtime"
+	"strings"
 
+	"github.com/Sirupsen/logrus"
+	derr "github.com/docker/docker/errors"
+	"github.com/docker/docker/pkg/system"
+)
+
+// DefaultDriverName is the driver name used for the driver
+// implemented in the local package.
+const DefaultDriverName string = "local"
+
+// Driver is for creating and removing volumes.
 type Driver interface {
 	// Name returns the name of the volume driver.
 	Name() string
 	// Create makes a new volume with the given id.
-	Create(string) (Volume, error)
+	Create(name string, opts map[string]string) (Volume, error)
 	// Remove deletes the volume.
-	Remove(Volume) error
+	Remove(vol Volume) (err error)
+	// List lists all the volumes the driver has
+	List() ([]Volume, error)
+	// Get retreives the volume with the requested name
+	Get(name string) (Volume, error)
 }
 
+// Volume is a place to store data. It is backed by a specific driver, and can be mounted.
 type Volume interface {
 	// Name returns the name of the volume
 	Name() string
@@ -25,33 +43,78 @@ type Volume interface {
 	Unmount() error
 }
 
-// read-write modes
-var rwModes = map[string]bool{
-	"rw":   true,
-	"rw,Z": true,
-	"rw,z": true,
-	"z,rw": true,
-	"Z,rw": true,
-	"Z":    true,
-	"z":    true,
+// MountPoint is the intersection point between a volume and a container. It
+// specifies which volume is to be used and where inside a container it should
+// be mounted.
+type MountPoint struct {
+	Source      string // Container host directory
+	Destination string // Inside the container
+	RW          bool   // True if writable
+	Name        string // Name set by user
+	Driver      string // Volume driver to use
+	Volume      Volume `json:"-"`
+
+	// Note Mode is not used on Windows
+	Mode string `json:"Relabel"` // Originally field was `Relabel`"
+
+	// Note Propagation is not used on Windows
+	Propagation string // Mount propagation string
+	Named       bool   // specifies if the mountpoint was specified by name
 }
 
-// read-only modes
-var roModes = map[string]bool{
-	"ro":   true,
-	"ro,Z": true,
-	"ro,z": true,
-	"z,ro": true,
-	"Z,ro": true,
+// Setup sets up a mount point by either mounting the volume if it is
+// configured, or creating the source directory if supplied.
+func (m *MountPoint) Setup() (string, error) {
+	if m.Volume != nil {
+		return m.Volume.Mount()
+	}
+	if len(m.Source) > 0 {
+		if _, err := os.Stat(m.Source); err != nil {
+			if !os.IsNotExist(err) {
+				return "", err
+			}
+			if runtime.GOOS != "windows" { // Windows does not have deprecation issues here
+				logrus.Warnf("Auto-creating non-existent volume host path %s, this is deprecated and will be removed soon", m.Source)
+				if err := system.MkdirAll(m.Source, 0755); err != nil {
+					return "", err
+				}
+			}
+		}
+		return m.Source, nil
+	}
+	return "", derr.ErrorCodeMountSetup
 }
 
-// ValidateMountMode will make sure the mount mode is valid.
-// returns if it's a valid mount mode and if it's read-write or not.
-func ValidateMountMode(mode string) (bool, bool) {
-	return roModes[mode] || rwModes[mode], rwModes[mode]
+// Path returns the path of a volume in a mount point.
+func (m *MountPoint) Path() string {
+	if m.Volume != nil {
+		return m.Volume.Path()
+	}
+	return m.Source
 }
 
-// ReadOnly tells you if a mode string is a valid read-only mode or not.
-func ReadWrite(mode string) bool {
-	return rwModes[mode]
+// ParseVolumesFrom ensure that the supplied volumes-from is valid.
+func ParseVolumesFrom(spec string) (string, string, error) {
+	if len(spec) == 0 {
+		return "", "", derr.ErrorCodeVolumeFromBlank.WithArgs(spec)
+	}
+
+	specParts := strings.SplitN(spec, ":", 2)
+	id := specParts[0]
+	mode := "rw"
+
+	if len(specParts) == 2 {
+		mode = specParts[1]
+		if !ValidMountMode(mode) {
+			return "", "", derr.ErrorCodeVolumeInvalidMode.WithArgs(mode)
+		}
+		// For now don't allow propagation properties while importing
+		// volumes from data container. These volumes will inherit
+		// the same propagation property as of the original volume
+		// in data container. This probably can be relaxed in future.
+		if HasPropagation(mode) {
+			return "", "", derr.ErrorCodeVolumeInvalidMode.WithArgs(mode)
+		}
+	}
+	return id, mode, nil
 }

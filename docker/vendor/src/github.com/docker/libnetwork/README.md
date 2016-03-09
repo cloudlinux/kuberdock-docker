@@ -6,8 +6,6 @@ Libnetwork provides a native Go implementation for connecting containers
 
 The goal of libnetwork is to deliver a robust Container Network Model that provides a consistent programming interface and the required network abstractions for applications.
 
-**NOTE**: libnetwork project is under heavy development and is not ready for general use.
-
 #### Design
 Please refer to the [design](docs/design.md) for more information.
 
@@ -17,64 +15,68 @@ There are many networking solutions available to suit a broad range of use-cases
 
 
 ```go
-        // Create a new controller instance
-        controller, err := libnetwork.New()
-        if err != nil {
-                return
-        }
+func main() {
+	if reexec.Init() {
+		return
+	}
 
-        // Select and configure the network driver
-        networkType := "bridge"
+	// Select and configure the network driver
+	networkType := "bridge"
 
-        driverOptions := options.Generic{}
-        genericOption := make(map[string]interface{})
-        genericOption[netlabel.GenericData] = driverOptions
-        err := controller.ConfigureNetworkDriver(networkType, genericOption)
-        if err != nil {
-                return
-        }
+	// Create a new controller instance
+	driverOptions := options.Generic{}
+	genericOption := make(map[string]interface{})
+	genericOption[netlabel.GenericData] = driverOptions
+	controller, err := libnetwork.New(config.OptionDriverConfig(networkType, genericOption))
+	if err != nil {
+		log.Fatalf("libnetwork.New: %s", err)
+	}
 
-        // Create a network for containers to join.
-        // NewNetwork accepts Variadic optional arguments that libnetwork and Drivers can make of
-        network, err := controller.NewNetwork(networkType, "network1")
-        if err != nil {
-                return
-        }
+	// Create a network for containers to join.
+	// NewNetwork accepts Variadic optional arguments that libnetwork and Drivers can use.
+	network, err := controller.NewNetwork(networkType, "network1")
+	if err != nil {
+		log.Fatalf("controller.NewNetwork: %s", err)
+	}
 
-        // For each new container: allocate IP and interfaces. The returned network
-        // settings will be used for container infos (inspect and such), as well as
-        // iptables rules for port publishing. This info is contained or accessible
-        // from the returned endpoint.
-        ep, err := network.CreateEndpoint("Endpoint1")
-        if err != nil {
-                return
-        }
+	// For each new container: allocate IP and interfaces. The returned network
+	// settings will be used for container infos (inspect and such), as well as
+	// iptables rules for port publishing. This info is contained or accessible
+	// from the returned endpoint.
+	ep, err := network.CreateEndpoint("Endpoint1")
+	if err != nil {
+		log.Fatalf("network.CreateEndpoint: %s", err)
+	}
 
-        // A container can join the endpoint by providing the container ID to the join
-        // api.
-        // Join accepts Variadic arguments which will be made use of by libnetwork and Drivers
-        err = ep.Join("container1",
-                libnetwork.JoinOptionHostname("test"),
-                libnetwork.JoinOptionDomainname("docker.io"))
-        if err != nil {
-                return
-        }
+	// Create the sandbox for the container.
+	// NewSandbox accepts Variadic optional arguments which libnetwork can use.
+	sbx, err := controller.NewSandbox("container1",
+		libnetwork.OptionHostname("test"),
+		libnetwork.OptionDomainname("docker.io"))
+	if err != nil {
+		log.Fatalf("controller.NewSandbox: %s", err)
+	}
 
-		// libnetwork client can check the endpoint's operational data via the Info() API
-		epInfo, err := ep.DriverInfo()
-		mapData, ok := epInfo[netlabel.PortMap]
-		if ok {
-			portMapping, ok := mapData.([]netutils.PortBinding)
-			if ok {
-				fmt.Printf("Current port mapping for endpoint %s: %v", ep.Name(), portMapping)
-			}
-		}
+	// A sandbox can join the endpoint via the join api.
+	err = ep.Join(sbx)
+	if err != nil {
+		log.Fatalf("ep.Join: %s", err)
+	}
 
+	// libnetwork client can check the endpoint's operational data via the Info() API
+	epInfo, err := ep.DriverInfo()
+	if err != nil {
+		log.Fatalf("ep.DriverInfo: %s", err)
+	}
+
+	macAddress, ok := epInfo[netlabel.MacAddress]
+	if !ok {
+		log.Fatalf("failed to get mac address from endpoint info")
+	}
+
+	fmt.Printf("Joined endpoint %s (%s) to sandbox %s (%s)\n", ep.Name(), macAddress, sbx.ContainerID(), sbx.Key())
+}
 ```
-#### Current Status
-Please watch this space for updates on the progress.
-
-Currently libnetwork is nothing more than an attempt to modularize the Docker platform's networking subsystem by moving it into libnetwork as a library.
 
 ## Future
 Please refer to [roadmap](ROADMAP.md) for more information.
@@ -85,4 +87,3 @@ Want to hack on libnetwork? [Docker's contributions guidelines](https://github.c
 
 ## Copyright and license
 Code and documentation copyright 2015 Docker, inc. Code released under the Apache 2.0 license. Docs released under Creative commons.
-

@@ -2,10 +2,14 @@
 *.o
 *.a
 *.so
+bin/
 
 # Folders
+integration-tmp/
 _obj
 _test
+.vagrant
+
 
 # Architecture specific extensions/prefixes
 *.[568vq]
@@ -22,12 +26,14 @@ _testmain.go
 *.exe
 *.test
 *.prof
+cmd/dnet/dnet
 
 # Coverage
 *.tmp
 *.coverprofile
 
-# IDE files
+# IDE files and folders
 .project
+.settings/
 
-libnetwork-build.created
+libnetworkbuild.created

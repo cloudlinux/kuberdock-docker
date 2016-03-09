@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"bufio"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -13,9 +12,9 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/docker/docker/autogen/dockerversion"
+	"github.com/docker/distribution/registry/api/errcode"
+	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/pkg/archive"
-	"github.com/docker/docker/pkg/fileutils"
 	"github.com/docker/docker/pkg/stringid"
 )
 
@@ -59,7 +58,7 @@ func isValidDockerInitPath(target string, selfPath string) bool { // target and 
 	if target == "" {
 		return false
 	}
-	if dockerversion.IAMSTATIC == "true" {
+	if dockerversion.IAmStatic == "true" {
 		if selfPath == "" {
 			return false
 		}
@@ -76,7 +75,7 @@ func isValidDockerInitPath(target string, selfPath string) bool { // target and 
 		}
 		return os.SameFile(targetFileInfo, selfPathFileInfo)
 	}
-	return dockerversion.INITSHA1 != "" && dockerInitSha1(target) == dockerversion.INITSHA1
+	return dockerversion.InitSHA1 != "" && dockerInitSha1(target) == dockerversion.InitSHA1
 }
 
 // DockerInitPath figures out the path of our dockerinit (which may be SelfPath())
@@ -88,7 +87,7 @@ func DockerInitPath(localCopy string) string {
 	}
 	var possibleInits = []string{
 		localCopy,
-		dockerversion.INITPATH,
+		dockerversion.InitPath,
 		filepath.Join(filepath.Dir(selfPath), "dockerinit"),
 
 		// FHS 3.0 Draft: "/usr/libexec includes internal binaries that are not intended to be executed directly by users or shell scripts. Applications may use a single subdirectory under /usr/libexec."
@@ -127,7 +126,7 @@ var globalTestID string
 // new directory.
 func TestDirectory(templateDir string) (dir string, err error) {
 	if globalTestID == "" {
-		globalTestID = stringid.GenerateRandomID()[:4]
+		globalTestID = stringid.GenerateNonCryptoID()[:4]
 	}
 	prefix := fmt.Sprintf("docker-test%s-%s-", globalTestID, GetCallerName(2))
 	if prefix == "" {
@@ -195,94 +194,21 @@ func ReplaceOrAppendEnvValues(defaults, overrides []string) []string {
 	return defaults
 }
 
-// ValidateContextDirectory checks if all the contents of the directory
-// can be read and returns an error if some files can't be read
-// symlinks which point to non-existing files don't trigger an error
-func ValidateContextDirectory(srcPath string, excludes []string) error {
-	return filepath.Walk(filepath.Join(srcPath, "."), func(filePath string, f os.FileInfo, err error) error {
-		// skip this directory/file if it's not in the path, it won't get added to the context
-		if relFilePath, err := filepath.Rel(srcPath, filePath); err != nil {
-			return err
-		} else if skip, err := fileutils.Matches(relFilePath, excludes); err != nil {
-			return err
-		} else if skip {
-			if f.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+// GetErrorMessage returns the human readable message associated with
+// the passed-in error. In some cases the default Error() func returns
+// something that is less than useful so based on its types this func
+// will go and get a better piece of text.
+func GetErrorMessage(err error) string {
+	switch err.(type) {
+	case errcode.Error:
+		e, _ := err.(errcode.Error)
+		return e.Message
 
-		if err != nil {
-			if os.IsPermission(err) {
-				return fmt.Errorf("can't stat '%s'", filePath)
-			}
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return err
-		}
+	case errcode.ErrorCode:
+		ec, _ := err.(errcode.ErrorCode)
+		return ec.Message()
 
-		// skip checking if symlinks point to non-existing files, such symlinks can be useful
-		// also skip named pipes, because they hanging on open
-		if f.Mode()&(os.ModeSymlink|os.ModeNamedPipe) != 0 {
-			return nil
-		}
-
-		if !f.IsDir() {
-			currentFile, err := os.Open(filePath)
-			if err != nil && os.IsPermission(err) {
-				return fmt.Errorf("no permission to read from '%s'", filePath)
-			}
-			currentFile.Close()
-		}
-		return nil
-	})
-}
-
-// ReadDockerIgnore reads a .dockerignore file and returns the list of file patterns
-// to ignore. Note this will trim whitespace from each line as well
-// as use GO's "clean" func to get the shortest/cleanest path for each.
-func ReadDockerIgnore(path string) ([]string, error) {
-	// Note that a missing .dockerignore file isn't treated as an error
-	reader, err := os.Open(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("Error reading '%s': %v", path, err)
-		}
-		return nil, nil
+	default:
+		return err.Error()
 	}
-	defer reader.Close()
-
-	scanner := bufio.NewScanner(reader)
-	var excludes []string
-
-	for scanner.Scan() {
-		pattern := strings.TrimSpace(scanner.Text())
-		if pattern == "" {
-			continue
-		}
-		pattern = filepath.Clean(pattern)
-		excludes = append(excludes, pattern)
-	}
-	if err = scanner.Err(); err != nil {
-		return nil, fmt.Errorf("Error reading '%s': %v", path, err)
-	}
-	return excludes, nil
-}
-
-// ImageReference combines `repo` and `ref` and returns a string representing
-// the combination. If `ref` is a digest (meaning it's of the form
-// <algorithm>:<digest>, the returned string is <repo>@<ref>. Otherwise,
-// ref is assumed to be a tag, and the returned string is <repo>:<tag>.
-func ImageReference(repo, ref string) string {
-	if DigestReference(ref) {
-		return repo + "@" + ref
-	}
-	return repo + ":" + ref
-}
-
-// DigestReference returns true if ref is a digest reference; i.e. if it
-// is of the form <algorithm>:<digest>.
-func DigestReference(ref string) bool {
-	return strings.Contains(ref, ":")
 }

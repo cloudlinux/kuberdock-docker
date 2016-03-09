@@ -5,18 +5,25 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"syscall"
 
+	"github.com/Sirupsen/logrus"
 	apiserver "github.com/docker/docker/api/server"
 	"github.com/docker/docker/daemon"
+	"github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/system"
 
-	_ "github.com/docker/docker/daemon/execdriver/lxc"
 	_ "github.com/docker/docker/daemon/execdriver/native"
 )
 
-func setPlatformServerConfig(serverConfig *apiserver.ServerConfig, daemonCfg *daemon.Config) *apiserver.ServerConfig {
+const defaultDaemonConfigFile = "/etc/docker/daemon.json"
+
+func setPlatformServerConfig(serverConfig *apiserver.Config, daemonCfg *daemon.Config) *apiserver.Config {
 	serverConfig.SocketGroup = daemonCfg.SocketGroup
+	serverConfig.EnableCors = daemonCfg.EnableCors
+	serverConfig.CorsHeaders = daemonCfg.CorsHeaders
+
 	return serverConfig
 }
 
@@ -24,7 +31,7 @@ func setPlatformServerConfig(serverConfig *apiserver.ServerConfig, daemonCfg *da
 // file.
 func currentUserIsOwner(f string) bool {
 	if fileInfo, err := system.Stat(f); err == nil && fileInfo != nil {
-		if int(fileInfo.Uid()) == os.Getuid() {
+		if int(fileInfo.UID()) == os.Getuid() {
 			return true
 		}
 	}
@@ -41,4 +48,21 @@ func setDefaultUmask() error {
 	}
 
 	return nil
+}
+
+func getDaemonConfDir() string {
+	return "/etc/docker"
+}
+
+// setupConfigReloadTrap configures the USR2 signal to reload the configuration.
+func setupConfigReloadTrap(configFile string, flags *mflag.FlagSet, reload func(*daemon.Config)) {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGHUP)
+	go func() {
+		for range c {
+			if err := daemon.ReloadConfiguration(configFile, flags, reload); err != nil {
+				logrus.Error(err)
+			}
+		}
+	}()
 }

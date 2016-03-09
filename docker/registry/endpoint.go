@@ -13,6 +13,7 @@ import (
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/distribution/registry/api/v2"
 	"github.com/docker/distribution/registry/client/transport"
+	registrytypes "github.com/docker/engine-api/types/registry"
 )
 
 // for mocking in unit tests
@@ -42,15 +43,19 @@ func scanForAPIVersion(address string) (string, APIVersion) {
 	return address, APIVersionUnknown
 }
 
-// NewEndpoint parses the given address to return a registry endpoint.
-func NewEndpoint(index *IndexInfo, metaHeaders http.Header) (*Endpoint, error) {
+// NewEndpoint parses the given address to return a registry endpoint.  v can be used to
+// specify a specific endpoint version
+func NewEndpoint(index *registrytypes.IndexInfo, metaHeaders http.Header, v APIVersion) (*Endpoint, error) {
 	tlsConfig, err := newTLSConfig(index.Name, index.Secure)
 	if err != nil {
 		return nil, err
 	}
-	endpoint, err := newEndpoint(index.GetAuthConfigKey(), tlsConfig, metaHeaders)
+	endpoint, err := newEndpoint(GetAuthConfigKey(index), tlsConfig, metaHeaders)
 	if err != nil {
 		return nil, err
+	}
+	if v != APIVersionUnknown {
+		endpoint.Version = v
 	}
 	if err := validateEndpoint(endpoint); err != nil {
 		return nil, err
@@ -111,11 +116,6 @@ func newEndpoint(address string, tlsConfig *tls.Config, metaHeaders http.Header)
 	return endpoint, nil
 }
 
-// GetEndpoint returns a new endpoint with the specified headers
-func (repoInfo *RepositoryInfo) GetEndpoint(metaHeaders http.Header) (*Endpoint, error) {
-	return NewEndpoint(repoInfo.Index, metaHeaders)
-}
-
 // Endpoint stores basic information about a registry endpoint.
 type Endpoint struct {
 	client         *http.Client
@@ -126,7 +126,7 @@ type Endpoint struct {
 	URLBuilder     *v2.URLBuilder
 }
 
-// Get the formated URL for the root of this registry Endpoint
+// Get the formatted URL for the root of this registry Endpoint
 func (e *Endpoint) String() string {
 	return fmt.Sprintf("%s/v%d/", e.URL, e.Version)
 }

@@ -15,12 +15,12 @@ var (
 // bridgeConfig stores all the bridge driver specific
 // configuration.
 type bridgeConfig struct {
-	VirtualSwitchName string
+	VirtualSwitchName string `json:"bridge,omitempty"`
 }
 
 // Config defines the configuration of a docker daemon.
 // These are the configuration settings that you pass
-// to the docker daemon when you launch it with say: `docker -d -e windows`
+// to the docker daemon when you launch it with say: `docker daemon -e windows`
 type Config struct {
 	CommonConfig
 
@@ -37,5 +37,5 @@ func (config *Config) InstallFlags(cmd *flag.FlagSet, usageFn func(string) strin
 	config.InstallCommonFlags(cmd, usageFn)
 
 	// Then platform-specific install flags.
-	cmd.StringVar(&config.Bridge.VirtualSwitchName, []string{"b", "-bridge"}, "", "Attach containers to a virtual switch")
+	cmd.StringVar(&config.bridgeConfig.VirtualSwitchName, []string{"b", "-bridge"}, "", "Attach containers to a virtual switch")
 }

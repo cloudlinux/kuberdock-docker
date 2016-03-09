@@ -38,28 +38,31 @@ is_set_as_module() {
 	zgrep "CONFIG_$1=m" "$CONFIG" > /dev/null
 }
 
-# see https://en.wikipedia.org/wiki/ANSI_escape_code#Colors
-declare -A colors=(
-	[black]=30
-	[red]=31
-	[green]=32
-	[yellow]=33
-	[blue]=34
-	[magenta]=35
-	[cyan]=36
-	[white]=37
-)
 color() {
-	color=()
+	local codes=()
 	if [ "$1" = 'bold' ]; then
-		color+=( '1' )
+		codes=( "${codes[@]}" '1' )
 		shift
 	fi
-	if [ $# -gt 0 ] && [ "${colors[$1]}" ]; then
-		color+=( "${colors[$1]}" )
+	if [ "$#" -gt 0 ]; then
+		local code=
+		case "$1" in
+			# see https://en.wikipedia.org/wiki/ANSI_escape_code#Colors
+			black) code=30 ;;
+			red) code=31 ;;
+			green) code=32 ;;
+			yellow) code=33 ;;
+			blue) code=34 ;;
+			magenta) code=35 ;;
+			cyan) code=36 ;;
+			white) code=37 ;;
+		esac
+		if [ "$code" ]; then
+			codes=( "${codes[@]}" "$code" )
+		fi
 	fi
 	local IFS=';'
-	echo -en '\033['"${color[*]}"m
+	echo -en '\033['"${codes[*]}"'m'
 }
 wrap_color() {
 	text="$1"
@@ -181,6 +184,12 @@ echo
 
 echo 'Optional Features:'
 {
+	check_flags USER_NS
+}
+{
+	check_flags SECCOMP
+}
+{
 	check_flags MEMCG_KMEM MEMCG_SWAP MEMCG_SWAP_ENABLED
 	if  is_set MEMCG_SWAP && ! is_set MEMCG_SWAP_ENABLED; then
 		echo "    $(wrap_color '(note that cgroup swap accounting is not enabled in your kernel config, you can enable it by setting boot option "swapaccount=1")' bold black)"
@@ -191,11 +200,17 @@ if [ "$kernelMajor" -lt 3 ] || [ "$kernelMajor" -eq 3 -a "$kernelMinor" -le 18 ]
 	check_flags RESOURCE_COUNTERS
 fi
 
+if [ "$kernelMajor" -lt 3 ] || [ "$kernelMajor" -eq 3 -a "$kernelMinor" -le 13 ]; then
+	netprio=NETPRIO_CGROUP
+else
+	netprio=CGROUP_NET_PRIO
+fi
+
 flags=(
-	BLK_CGROUP IOSCHED_CFQ
+	BLK_CGROUP IOSCHED_CFQ BLK_DEV_THROTTLING
 	CGROUP_PERF
 	CGROUP_HUGETLB
-	NET_CLS_CGROUP NETPRIO_CGROUP
+	NET_CLS_CGROUP $netprio
 	CFS_BANDWIDTH FAIR_GROUP_SCHED RT_GROUP_SCHED
 )
 check_flags "${flags[@]}"
@@ -234,6 +249,3 @@ echo '- Storage Drivers:'
 } | sed 's/^/  /'
 echo
 
-#echo 'Potential Future Features:'
-#check_flags USER_NS
-#echo

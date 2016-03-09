@@ -2,49 +2,13 @@
 
 source "${MAKEDIR}/.validate"
 
-# We will eventually get to the point when packages should be the complete list
-# of subpackages, vendoring excluded, as given by:
-#
-# packages=( $(go list ./... 2> /dev/null | grep -vE "^github.com/docker/docker/vendor" || true ) )
-
-packages=(
-	builder
-	builder/command
-	builder/parser
-	builder/parser/dumper
-	daemon/events
-	daemon/execdriver/native/template
-	daemon/network
-	docker
-	dockerinit
-	integration-cli
-	pkg/chrootarchive
-	pkg/directory
-	pkg/fileutils
-	pkg/homedir
-	pkg/listenbuffer
-	pkg/mflag/example
-	pkg/mount
-	pkg/namesgenerator
-	pkg/nat
-	pkg/promise
-	pkg/pubsub
-	pkg/random
-	pkg/reexec
-	pkg/symlink
-	pkg/timeutils
-	pkg/tlsconfig
-	pkg/urlutil
-	pkg/version
-	registry
-	utils
-)
+IFS=$'\n'
+files=( $(validate_diff --diff-filter=ACMR --name-only -- '*.go' | grep -v '^vendor/' || true) )
+unset IFS
 
 errors=()
-for p in "${packages[@]}"; do
-	# Run golint on package/*.go file explicitly to validate all go files
-	# and not just the ones for the current platform.
-	failedLint=$(golint "$p"/*.go)
+for f in "${files[@]}"; do
+	failedLint=$(golint "$f")
 	if [ "$failedLint" ]; then
 		errors+=( "$failedLint" )
 	fi
