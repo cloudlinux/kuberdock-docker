@@ -15,4 +15,3 @@ exec' run (though it's ignored)
 3. Not all containers may need this (whether logrotate is installed or not)
 
 Suggestions to improve this are welcome.
-
