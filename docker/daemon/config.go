@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/discovery"
 	flag "github.com/docker/docker/pkg/mflag"
+	"github.com/docker/docker/registry"
 	"github.com/imdario/mergo"
 )
 
@@ -66,7 +67,9 @@ type CommonConfig struct {
 	Labels               []string            `json:"labels,omitempty"`
 	Mtu                  int                 `json:"mtu,omitempty"`
 	Pidfile              string              `json:"pidfile,omitempty"`
+	RawLogs              bool                `json:"raw-logs,omitempty"`
 	Root                 string              `json:"graph,omitempty"`
+	SocketGroup          string              `json:"group,omitempty"`
 	TrustKeyPath         string              `json:"-"`
 
 	// ClusterStore is the storage backend used for the cluster information. It is used by both
@@ -94,6 +97,7 @@ type CommonConfig struct {
 	CommonTLSOptions
 	LogConfig
 	bridgeConfig // bridgeConfig holds bridge network specific configuration.
+	registry.ServiceOptions
 
 	reloadLock sync.Mutex
 	valuesSet  map[string]interface{}
@@ -104,15 +108,18 @@ type CommonConfig struct {
 // Subsequent calls to `flag.Parse` will populate config with values parsed
 // from the command-line.
 func (config *Config) InstallCommonFlags(cmd *flag.FlagSet, usageFn func(string) string) {
+	config.ServiceOptions.InstallCliFlags(cmd, usageFn)
+
 	cmd.Var(opts.NewNamedListOptsRef("storage-opts", &config.GraphOptions, nil), []string{"-storage-opt"}, usageFn("Set storage driver options"))
 	cmd.Var(opts.NewNamedListOptsRef("authorization-plugins", &config.AuthorizationPlugins, nil), []string{"-authorization-plugin"}, usageFn("List authorization plugins in order from first evaluator to last"))
-	cmd.Var(opts.NewNamedListOptsRef("exec-opts", &config.ExecOptions, nil), []string{"-exec-opt"}, usageFn("Set exec driver options"))
+	cmd.Var(opts.NewNamedListOptsRef("exec-opts", &config.ExecOptions, nil), []string{"-exec-opt"}, usageFn("Set runtime execution options"))
 	cmd.StringVar(&config.Pidfile, []string{"p", "-pidfile"}, defaultPidFile, usageFn("Path to use for daemon PID file"))
 	cmd.StringVar(&config.Root, []string{"g", "-graph"}, defaultGraph, usageFn("Root of the Docker runtime"))
-	cmd.StringVar(&config.ExecRoot, []string{"-exec-root"}, "/var/run/docker", usageFn("Root of the Docker execdriver"))
+	cmd.StringVar(&config.ExecRoot, []string{"-exec-root"}, defaultExecRoot, usageFn("Root directory for execution state files"))
 	cmd.BoolVar(&config.AutoRestart, []string{"#r", "#-restart"}, true, usageFn("--restart on the daemon has been deprecated in favor of --restart policies on docker run"))
 	cmd.StringVar(&config.GraphDriver, []string{"s", "-storage-driver"}, "", usageFn("Storage driver to use"))
 	cmd.IntVar(&config.Mtu, []string{"#mtu", "-mtu"}, 0, usageFn("Set the containers network MTU"))
+	cmd.BoolVar(&config.RawLogs, []string{"-raw-logs"}, false, usageFn("Full timestamps without ANSI coloring"))
 	// FIXME: why the inconsistency between "hosts" and "sockets"?
 	cmd.Var(opts.NewListOptsRef(&config.DNS, opts.ValidateIPAddress), []string{"#dns", "-dns"}, usageFn("DNS server to use"))
 	cmd.Var(opts.NewNamedListOptsRef("dns-opts", &config.DNSOptions, nil), []string{"-dns-opt"}, usageFn("DNS options to use"))
@@ -157,6 +164,11 @@ func ReloadConfiguration(configFile string, flags *flag.FlagSet, reload func(*Co
 	if err != nil {
 		return err
 	}
+
+	if err := validateConfiguration(newConfig); err != nil {
+		return fmt.Errorf("file configuration validation failed (%v)", err)
+	}
+
 	reload(newConfig)
 	return nil
 }
@@ -175,6 +187,10 @@ func MergeDaemonConfigurations(flagsConfig *Config, flags *flag.FlagSet, configF
 	fileConfig, err := getConflictFreeConfiguration(configFile, flags)
 	if err != nil {
 		return nil, err
+	}
+
+	if err := validateConfiguration(fileConfig); err != nil {
+		return nil, fmt.Errorf("file configuration validation failed (%v)", err)
 	}
 
 	// merge flags configuration on top of the file configuration
@@ -327,5 +343,32 @@ func findConfigurationConflicts(config map[string]interface{}, flags *flag.FlagS
 	if len(conflicts) > 0 {
 		return fmt.Errorf("the following directives are specified both as a flag and in the configuration file: %s", strings.Join(conflicts, ", "))
 	}
+	return nil
+}
+
+// validateConfiguration validates some specific configs.
+// such as config.DNS, config.Labels, config.DNSSearch
+func validateConfiguration(config *Config) error {
+	// validate DNS
+	for _, dns := range config.DNS {
+		if _, err := opts.ValidateIPAddress(dns); err != nil {
+			return err
+		}
+	}
+
+	// validate DNSSearch
+	for _, dnsSearch := range config.DNSSearch {
+		if _, err := opts.ValidateDNSSearch(dnsSearch); err != nil {
+			return err
+		}
+	}
+
+	// validate Labels
+	for _, label := range config.Labels {
+		if _, err := opts.ValidateLabel(label); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }

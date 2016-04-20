@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/Sirupsen/logrus"
-	"github.com/docker/docker/api"
 	"github.com/docker/docker/builder"
 	"github.com/docker/docker/builder/dockerfile/parser"
 	"github.com/docker/docker/pkg/archive"
@@ -38,7 +37,7 @@ import (
 	"github.com/docker/engine-api/types/strslice"
 )
 
-func (b *Builder) commit(id string, autoCmd *strslice.StrSlice, comment string) error {
+func (b *Builder) commit(id string, autoCmd strslice.StrSlice, comment string) error {
 	if b.disableCommit {
 		return nil
 	}
@@ -46,14 +45,15 @@ func (b *Builder) commit(id string, autoCmd *strslice.StrSlice, comment string) 
 		return fmt.Errorf("Please provide a source image with `from` prior to commit")
 	}
 	b.runConfig.Image = b.image
+
 	if id == "" {
 		cmd := b.runConfig.Cmd
 		if runtime.GOOS != "windows" {
-			b.runConfig.Cmd = strslice.New("/bin/sh", "-c", "#(nop) "+comment)
+			b.runConfig.Cmd = strslice.StrSlice{"/bin/sh", "-c", "#(nop) " + comment}
 		} else {
-			b.runConfig.Cmd = strslice.New("cmd", "/S /C", "REM (nop) "+comment)
+			b.runConfig.Cmd = strslice.StrSlice{"cmd", "/S /C", "REM (nop) " + comment}
 		}
-		defer func(cmd *strslice.StrSlice) { b.runConfig.Cmd = cmd }(cmd)
+		defer func(cmd strslice.StrSlice) { b.runConfig.Cmd = cmd }(cmd)
 
 		hit, err := b.probeCache()
 		if err != nil {
@@ -82,6 +82,7 @@ func (b *Builder) commit(id string, autoCmd *strslice.StrSlice, comment string) 
 	if err != nil {
 		return err
 	}
+
 	b.image = imageID
 	return nil
 }
@@ -172,11 +173,11 @@ func (b *Builder) runContextCommand(args []string, allowRemote bool, allowLocalD
 
 	cmd := b.runConfig.Cmd
 	if runtime.GOOS != "windows" {
-		b.runConfig.Cmd = strslice.New("/bin/sh", "-c", fmt.Sprintf("#(nop) %s %s in %s", cmdName, srcHash, dest))
+		b.runConfig.Cmd = strslice.StrSlice{"/bin/sh", "-c", fmt.Sprintf("#(nop) %s %s in %s", cmdName, srcHash, dest)}
 	} else {
-		b.runConfig.Cmd = strslice.New("cmd", "/S", "/C", fmt.Sprintf("REM (nop) %s %s in %s", cmdName, srcHash, dest))
+		b.runConfig.Cmd = strslice.StrSlice{"cmd", "/S", "/C", fmt.Sprintf("REM (nop) %s %s in %s", cmdName, srcHash, dest)}
 	}
-	defer func(cmd *strslice.StrSlice) { b.runConfig.Cmd = cmd }(cmd)
+	defer func(cmd strslice.StrSlice) { b.runConfig.Cmd = cmd }(cmd)
 
 	if hit, err := b.probeCache(); err != nil {
 		return err
@@ -205,7 +206,7 @@ func (b *Builder) runContextCommand(args []string, allowRemote bool, allowLocalD
 	}
 
 	for _, info := range infos {
-		if err := b.docker.BuilderCopy(container.ID, dest, info.FileInfo, info.decompress); err != nil {
+		if err := b.docker.CopyOnBuild(container.ID, dest, info.FileInfo, info.decompress); err != nil {
 			return err
 		}
 	}
@@ -396,10 +397,10 @@ func containsWildcards(name string) bool {
 
 func (b *Builder) processImageFrom(img builder.Image) error {
 	if img != nil {
-		b.image = img.ID()
+		b.image = img.ImageID()
 
-		if img.Config() != nil {
-			b.runConfig = img.Config()
+		if img.RunConfig() != nil {
+			b.runConfig = img.RunConfig()
 		}
 	}
 
@@ -469,7 +470,7 @@ func (b *Builder) probeCache() (bool, error) {
 	if !ok || b.options.NoCache || b.cacheBusted {
 		return false, nil
 	}
-	cache, err := c.GetCachedImage(b.image, b.runConfig)
+	cache, err := c.GetCachedImageOnBuild(b.image, b.runConfig)
 	if err != nil {
 		return false, err
 	}
@@ -506,7 +507,7 @@ func (b *Builder) create() (string, error) {
 
 	// TODO: why not embed a hostconfig in builder?
 	hostConfig := &container.HostConfig{
-		Isolation: b.options.IsolationLevel,
+		Isolation: b.options.Isolation,
 		ShmSize:   b.options.ShmSize,
 		Resources: resources,
 	}
@@ -528,11 +529,9 @@ func (b *Builder) create() (string, error) {
 	b.tmpContainers[c.ID] = struct{}{}
 	fmt.Fprintf(b.Stdout, " ---> Running in %s\n", stringid.TruncateID(c.ID))
 
-	if config.Cmd.Len() > 0 {
-		// override the entry point that may have been picked up from the base image
-		if err := b.docker.ContainerUpdateCmd(c.ID, config.Cmd.Slice()); err != nil {
-			return "", err
-		}
+	// override the entry point that may have been picked up from the base image
+	if err := b.docker.ContainerUpdateCmdOnBuild(c.ID, config.Cmd); err != nil {
+		return "", err
 	}
 
 	return c.ID, nil
@@ -541,7 +540,7 @@ func (b *Builder) create() (string, error) {
 func (b *Builder) run(cID string) (err error) {
 	errCh := make(chan error)
 	go func() {
-		errCh <- b.docker.ContainerAttach(cID, nil, b.Stdout, b.Stderr, true)
+		errCh <- b.docker.ContainerAttachRaw(cID, nil, b.Stdout, b.Stderr, true)
 	}()
 
 	finished := make(chan struct{})
@@ -568,7 +567,7 @@ func (b *Builder) run(cID string) (err error) {
 	if ret, _ := b.docker.ContainerWait(cID, -1); ret != 0 {
 		// TODO: change error type, because jsonmessage.JSONError assumes HTTP
 		return &jsonmessage.JSONError{
-			Message: fmt.Sprintf("The command '%s' returned a non-zero code: %d", b.runConfig.Cmd.ToString(), ret),
+			Message: fmt.Sprintf("The command '%s' returned a non-zero code: %d", strings.Join(b.runConfig.Cmd, " "), ret),
 			Code:    ret,
 		}
 	}
@@ -604,7 +603,7 @@ func (b *Builder) readDockerfile() error {
 	// that then look for 'dockerfile'.  If neither are found then default
 	// back to 'Dockerfile' and use that in the error message.
 	if b.options.Dockerfile == "" {
-		b.options.Dockerfile = api.DefaultDockerfileName
+		b.options.Dockerfile = builder.DefaultDockerfileName
 		if _, _, err := b.context.Stat(b.options.Dockerfile); os.IsNotExist(err) {
 			lowercase := strings.ToLower(b.options.Dockerfile)
 			if _, _, err := b.context.Stat(lowercase); err == nil {

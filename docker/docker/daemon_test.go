@@ -4,6 +4,7 @@ package main
 
 import (
 	"io/ioutil"
+	"os"
 	"strings"
 	"testing"
 
@@ -63,8 +64,9 @@ func TestLoadDaemonCliConfigWithConflicts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	configFile := f.Name()
+	defer os.Remove(configFile)
+
 	f.Write([]byte(`{"labels": ["l3=foo"]}`))
 	f.Close()
 
@@ -103,8 +105,9 @@ func TestLoadDaemonCliConfigWithTLSVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	configFile := f.Name()
+	defer os.Remove(configFile)
+
 	f.Write([]byte(`{"tlsverify": true}`))
 	f.Close()
 
@@ -135,8 +138,9 @@ func TestLoadDaemonCliConfigWithExplicitTLSVerifyFalse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	configFile := f.Name()
+	defer os.Remove(configFile)
+
 	f.Write([]byte(`{"tlsverify": false}`))
 	f.Close()
 
@@ -167,8 +171,9 @@ func TestLoadDaemonCliConfigWithoutTLSVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	configFile := f.Name()
+	defer os.Remove(configFile)
+
 	f.Write([]byte(`{}`))
 	f.Close()
 
@@ -194,8 +199,9 @@ func TestLoadDaemonCliConfigWithLogLevel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	configFile := f.Name()
+	defer os.Remove(configFile)
+
 	f.Write([]byte(`{"log-level": "warn"}`))
 	f.Close()
 
@@ -220,6 +226,7 @@ func TestLoadDaemonCliConfigWithLogLevel(t *testing.T) {
 func TestLoadDaemonConfigWithEmbeddedOptions(t *testing.T) {
 	c := &daemon.Config{}
 	common := &cli.CommonFlags{}
+
 	flags := mflag.NewFlagSet("test", mflag.ContinueOnError)
 	flags.String([]string{"-tlscacert"}, "", "")
 	flags.String([]string{"-log-driver"}, "", "")
@@ -228,8 +235,9 @@ func TestLoadDaemonConfigWithEmbeddedOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	configFile := f.Name()
+	defer os.Remove(configFile)
+
 	f.Write([]byte(`{"tlscacert": "/etc/certs/ca.pem", "log-driver": "syslog"}`))
 	f.Close()
 
@@ -248,69 +256,20 @@ func TestLoadDaemonConfigWithEmbeddedOptions(t *testing.T) {
 	}
 }
 
-func TestLoadDaemonConfigWithMapOptions(t *testing.T) {
+func TestLoadDaemonConfigWithRegistryOptions(t *testing.T) {
 	c := &daemon.Config{}
 	common := &cli.CommonFlags{}
 	flags := mflag.NewFlagSet("test", mflag.ContinueOnError)
-
-	flags.Var(opts.NewNamedMapOpts("cluster-store-opts", c.ClusterOpts, nil), []string{"-cluster-store-opt"}, "")
-	flags.Var(opts.NewNamedMapOpts("log-opts", c.LogConfig.Config, nil), []string{"-log-opt"}, "")
+	c.ServiceOptions.InstallCliFlags(flags, absentFromHelp)
 
 	f, err := ioutil.TempFile("", "docker-config-")
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	configFile := f.Name()
-	f.Write([]byte(`{
-		"cluster-store-opts": {"kv.cacertfile": "/var/lib/docker/discovery_certs/ca.pem"},
-		"log-opts": {"tag": "test"}
-}`))
-	f.Close()
+	defer os.Remove(configFile)
 
-	loadedConfig, err := loadDaemonCliConfig(c, flags, common, configFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loadedConfig == nil {
-		t.Fatal("expected configuration, got nil")
-	}
-	if loadedConfig.ClusterOpts == nil {
-		t.Fatal("expected cluster options, got nil")
-	}
-
-	expectedPath := "/var/lib/docker/discovery_certs/ca.pem"
-	if caPath := loadedConfig.ClusterOpts["kv.cacertfile"]; caPath != expectedPath {
-		t.Fatalf("expected %s, got %s", expectedPath, caPath)
-	}
-
-	if loadedConfig.LogConfig.Config == nil {
-		t.Fatal("expected log config options, got nil")
-	}
-	if tag := loadedConfig.LogConfig.Config["tag"]; tag != "test" {
-		t.Fatalf("expected log tag `test`, got %s", tag)
-	}
-}
-
-func TestLoadDaemonConfigWithTrueDefaultValues(t *testing.T) {
-	c := &daemon.Config{}
-	common := &cli.CommonFlags{}
-	flags := mflag.NewFlagSet("test", mflag.ContinueOnError)
-	flags.BoolVar(&c.EnableUserlandProxy, []string{"-userland-proxy"}, true, "")
-
-	f, err := ioutil.TempFile("", "docker-config-")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := flags.ParseFlags([]string{}, false); err != nil {
-		t.Fatal(err)
-	}
-
-	configFile := f.Name()
-	f.Write([]byte(`{
-		"userland-proxy": false
-}`))
+	f.Write([]byte(`{"registry-mirrors": ["https://mirrors.docker.com"], "insecure-registries": ["https://insecure.docker.com"], "disable-legacy-registry": true}`))
 	f.Close()
 
 	loadedConfig, err := loadDaemonCliConfig(c, flags, common, configFile)
@@ -321,50 +280,17 @@ func TestLoadDaemonConfigWithTrueDefaultValues(t *testing.T) {
 		t.Fatal("expected configuration, got nil")
 	}
 
-	if loadedConfig.EnableUserlandProxy {
-		t.Fatal("expected userland proxy to be disabled, got enabled")
+	m := loadedConfig.Mirrors
+	if len(m) != 1 {
+		t.Fatalf("expected 1 mirror, got %d", len(m))
 	}
 
-	// make sure reloading doesn't generate configuration
-	// conflicts after normalizing boolean values.
-	err = daemon.ReloadConfiguration(configFile, flags, func(reloadedConfig *daemon.Config) {
-		if reloadedConfig.EnableUserlandProxy {
-			t.Fatal("expected userland proxy to be disabled, got enabled")
-		}
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestLoadDaemonConfigWithTrueDefaultValuesLeaveDefaults(t *testing.T) {
-	c := &daemon.Config{}
-	common := &cli.CommonFlags{}
-	flags := mflag.NewFlagSet("test", mflag.ContinueOnError)
-	flags.BoolVar(&c.EnableUserlandProxy, []string{"-userland-proxy"}, true, "")
-
-	f, err := ioutil.TempFile("", "docker-config-")
-	if err != nil {
-		t.Fatal(err)
+	r := loadedConfig.InsecureRegistries
+	if len(r) != 1 {
+		t.Fatalf("expected 1 insecure registries, got %d", len(r))
 	}
 
-	if err := flags.ParseFlags([]string{}, false); err != nil {
-		t.Fatal(err)
-	}
-
-	configFile := f.Name()
-	f.Write([]byte(`{}`))
-	f.Close()
-
-	loadedConfig, err := loadDaemonCliConfig(c, flags, common, configFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loadedConfig == nil {
-		t.Fatal("expected configuration, got nil")
-	}
-
-	if !loadedConfig.EnableUserlandProxy {
-		t.Fatal("expected userland proxy to be enabled, got disabled")
+	if !loadedConfig.V2Only {
+		t.Fatal("expected disable-legacy-registry to be true, got false")
 	}
 }

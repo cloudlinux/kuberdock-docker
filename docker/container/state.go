@@ -5,8 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/daemon/execdriver"
-	derr "github.com/docker/docker/errors"
 	"github.com/docker/go-units"
 )
 
@@ -113,17 +111,17 @@ func wait(waitChan <-chan struct{}, timeout time.Duration) error {
 	}
 	select {
 	case <-time.After(timeout):
-		return derr.ErrorCodeTimedOut.WithArgs(timeout)
+		return fmt.Errorf("Timed out: %v", timeout)
 	case <-waitChan:
 		return nil
 	}
 }
 
-// waitRunning waits until state is running. If state is already
+// WaitRunning waits until state is running. If state is already
 // running it returns immediately. If you want wait forever you must
 // supply negative timeout. Returns pid, that was passed to
 // SetRunning.
-func (s *State) waitRunning(timeout time.Duration) (int, error) {
+func (s *State) WaitRunning(timeout time.Duration) (int, error) {
 	s.Lock()
 	if s.Running {
 		pid := s.Pid
@@ -180,28 +178,31 @@ func (s *State) getExitCode() int {
 }
 
 // SetRunning sets the state of the container to "running".
-func (s *State) SetRunning(pid int) {
+func (s *State) SetRunning(pid int, initial bool) {
 	s.Error = ""
 	s.Running = true
 	s.Paused = false
 	s.Restarting = false
 	s.ExitCode = 0
 	s.Pid = pid
-	s.StartedAt = time.Now().UTC()
+	if initial {
+		s.StartedAt = time.Now().UTC()
+	}
 	close(s.waitChan) // fire waiters for start
 	s.waitChan = make(chan struct{})
 }
 
 // SetStoppedLocking locks the container state is sets it to "stopped".
-func (s *State) SetStoppedLocking(exitStatus *execdriver.ExitStatus) {
+func (s *State) SetStoppedLocking(exitStatus *ExitStatus) {
 	s.Lock()
 	s.SetStopped(exitStatus)
 	s.Unlock()
 }
 
 // SetStopped sets the container state to "stopped" without locking.
-func (s *State) SetStopped(exitStatus *execdriver.ExitStatus) {
+func (s *State) SetStopped(exitStatus *ExitStatus) {
 	s.Running = false
+	s.Paused = false
 	s.Restarting = false
 	s.Pid = 0
 	s.FinishedAt = time.Now().UTC()
@@ -212,7 +213,7 @@ func (s *State) SetStopped(exitStatus *execdriver.ExitStatus) {
 
 // SetRestartingLocking is when docker handles the auto restart of containers when they are
 // in the middle of a stop and being restarted again
-func (s *State) SetRestartingLocking(exitStatus *execdriver.ExitStatus) {
+func (s *State) SetRestartingLocking(exitStatus *ExitStatus) {
 	s.Lock()
 	s.SetRestarting(exitStatus)
 	s.Unlock()
@@ -220,7 +221,7 @@ func (s *State) SetRestartingLocking(exitStatus *execdriver.ExitStatus) {
 
 // SetRestarting sets the container state to "restarting".
 // It also sets the container PID to 0.
-func (s *State) SetRestarting(exitStatus *execdriver.ExitStatus) {
+func (s *State) SetRestarting(exitStatus *ExitStatus) {
 	// we should consider the container running when it is restarting because of
 	// all the checks in docker around rm/stop/etc
 	s.Running = true
@@ -256,14 +257,15 @@ func (s *State) IsRestarting() bool {
 }
 
 // SetRemovalInProgress sets the container state as being removed.
-func (s *State) SetRemovalInProgress() error {
+// It returns true if the container was already in that state.
+func (s *State) SetRemovalInProgress() bool {
 	s.Lock()
 	defer s.Unlock()
 	if s.RemovalInProgress {
-		return derr.ErrorCodeAlreadyRemoving
+		return true
 	}
 	s.RemovalInProgress = true
-	return nil
+	return false
 }
 
 // ResetRemovalInProgress make the RemovalInProgress state to false.

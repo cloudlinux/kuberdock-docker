@@ -74,6 +74,7 @@ Creates a new container.
       -P, --publish-all             Publish all exposed ports to random ports
       -p, --publish=[]              Publish a container's port(s) to the host
       --pid=""                      PID namespace to use
+      --pids-limit=-1                Tune container pids limit (set -1 for unlimited), kernel >= 4.3
       --privileged                  Give extended privileges to this container
       --read-only                   Mount the container's root filesystem as read only
       --restart="no"                Restart policy (no, on-failure[:max-retry], always, unless-stopped)
@@ -82,14 +83,17 @@ Creates a new container.
       --shm-size=[]                 Size of `/dev/shm`. The format is `<number><unit>`. `number` must be greater than `0`.  Unit is optional and can be `b` (bytes), `k` (kilobytes), `m` (megabytes), or `g` (gigabytes). If you omit the unit, the system uses bytes. If you omit the size entirely, the system uses `64m`.
       -t, --tty                     Allocate a pseudo-TTY
       -u, --user=""                 Username or UID
+      --userns=""                   Container user namespace
+                                    'host': Use the Docker host user namespace
+                                    '': Use the Docker daemon user namespace specified by `--userns-remap` option.
       --ulimit=[]                   Ulimit options
       --uts=""                      UTS namespace to use
       -v, --volume=[host-src:]container-dest[:<options>]
                                     Bind mount a volume. The comma-delimited
-                                    `options` are [rw|ro], [z|Z], or
-                                    [[r]shared|[r]slave|[r]private]. The
-                                    'host-src' is an absolute path or a name
-                                    value.
+                                    `options` are [rw|ro], [z|Z],
+                                    [[r]shared|[r]slave|[r]private], and
+                                    [nocopy]. The 'host-src' is an absolute path
+                                    or a name value.
       --volume-driver=""            Container's volume driver
       --volumes-from=[]             Mount volumes from the specified container(s)
       -w, --workdir=""              Working directory inside the container

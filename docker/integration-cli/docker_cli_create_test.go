@@ -20,7 +20,11 @@ import (
 
 // Make sure we can create a simple container with some args
 func (s *DockerSuite) TestCreateArgs(c *check.C) {
-	testRequires(c, DaemonIsLinux)
+	// TODO Windows. This requires further investigation for porting to
+	// Windows CI. Currently fails.
+	if daemonPlatform == "windows" {
+		c.Skip("Fails on Windows CI")
+	}
 	out, _ := dockerCmd(c, "create", "busybox", "command", "arg1", "arg2", "arg with space")
 
 	cleanedContainerID := strings.TrimSpace(out)
@@ -58,7 +62,6 @@ func (s *DockerSuite) TestCreateArgs(c *check.C) {
 
 // Make sure we can set hostconfig options too
 func (s *DockerSuite) TestCreateHostConfig(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	out, _ := dockerCmd(c, "create", "-P", "busybox", "echo")
 
 	cleanedContainerID := strings.TrimSpace(out)
@@ -81,6 +84,7 @@ func (s *DockerSuite) TestCreateHostConfig(c *check.C) {
 }
 
 func (s *DockerSuite) TestCreateWithPortRange(c *check.C) {
+	// Windows does not currently support port ranges.
 	testRequires(c, DaemonIsLinux)
 	out, _ := dockerCmd(c, "create", "-p", "3300-3303:3300-3303/tcp", "busybox", "echo")
 
@@ -110,7 +114,8 @@ func (s *DockerSuite) TestCreateWithPortRange(c *check.C) {
 
 }
 
-func (s *DockerSuite) TestCreateWithiLargePortRange(c *check.C) {
+func (s *DockerSuite) TestCreateWithLargePortRange(c *check.C) {
+	// Windows does not currently support port ranges.
 	testRequires(c, DaemonIsLinux)
 	out, _ := dockerCmd(c, "create", "-p", "1-65535:1-65535/tcp", "busybox", "echo")
 
@@ -141,8 +146,6 @@ func (s *DockerSuite) TestCreateWithiLargePortRange(c *check.C) {
 
 // "test123" should be printed by docker create + start
 func (s *DockerSuite) TestCreateEchoStdout(c *check.C) {
-	testRequires(c, DaemonIsLinux)
-
 	out, _ := dockerCmd(c, "create", "busybox", "echo", "test123")
 
 	cleanedContainerID := strings.TrimSpace(out)
@@ -153,13 +156,16 @@ func (s *DockerSuite) TestCreateEchoStdout(c *check.C) {
 }
 
 func (s *DockerSuite) TestCreateVolumesCreated(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	testRequires(c, SameHostDaemon)
+	prefix := "/"
+	if daemonPlatform == "windows" {
+		prefix = `c:\`
+	}
 
 	name := "test_create_volume"
-	dockerCmd(c, "create", "--name", name, "-v", "/foo", "busybox")
+	dockerCmd(c, "create", "--name", name, "-v", prefix+"foo", "busybox")
 
-	dir, err := inspectMountSourceField(name, "/foo")
+	dir, err := inspectMountSourceField(name, prefix+"foo")
 	c.Assert(err, check.IsNil, check.Commentf("Error getting volume host path: %q", err))
 
 	if _, err := os.Stat(dir); err != nil && os.IsNotExist(err) {
@@ -172,14 +178,12 @@ func (s *DockerSuite) TestCreateVolumesCreated(c *check.C) {
 }
 
 func (s *DockerSuite) TestCreateLabels(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	name := "test_create_labels"
 	expected := map[string]string{"k1": "v1", "k2": "v2"}
 	dockerCmd(c, "create", "--name", name, "-l", "k1=v1", "--label", "k2=v2", "busybox")
 
 	actual := make(map[string]string)
-	err := inspectFieldAndMarshall(name, "Config.Labels", &actual)
-	c.Assert(err, check.IsNil)
+	inspectFieldAndMarshall(c, name, "Config.Labels", &actual)
 
 	if !reflect.DeepEqual(expected, actual) {
 		c.Fatalf("Expected %s got %s", expected, actual)
@@ -187,7 +191,6 @@ func (s *DockerSuite) TestCreateLabels(c *check.C) {
 }
 
 func (s *DockerSuite) TestCreateLabelFromImage(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	imageName := "testcreatebuildlabel"
 	_, err := buildImage(imageName,
 		`FROM busybox
@@ -201,8 +204,7 @@ func (s *DockerSuite) TestCreateLabelFromImage(c *check.C) {
 	dockerCmd(c, "create", "--name", name, "-l", "k2=x", "--label", "k3=v3", imageName)
 
 	actual := make(map[string]string)
-	err = inspectFieldAndMarshall(name, "Config.Labels", &actual)
-	c.Assert(err, check.IsNil)
+	inspectFieldAndMarshall(c, name, "Config.Labels", &actual)
 
 	if !reflect.DeepEqual(expected, actual) {
 		c.Fatalf("Expected %s got %s", expected, actual)
@@ -210,6 +212,10 @@ func (s *DockerSuite) TestCreateLabelFromImage(c *check.C) {
 }
 
 func (s *DockerSuite) TestCreateHostnameWithNumber(c *check.C) {
+	// TODO Windows. Consider enabling this in TP5 timeframe if Windows support
+	// is fully hooked up. The hostname is passed through, but only to the
+	// environment variable "COMPUTERNAME". It is not hooked up to hostname.exe
+	// or returned in ipconfig. Needs platform support in networking.
 	testRequires(c, DaemonIsLinux)
 	out, _ := dockerCmd(c, "run", "-h", "web.0", "busybox", "hostname")
 	c.Assert(strings.TrimSpace(out), checker.Equals, "web.0", check.Commentf("hostname not set, expected `web.0`, got: %s", out))
@@ -217,7 +223,6 @@ func (s *DockerSuite) TestCreateHostnameWithNumber(c *check.C) {
 }
 
 func (s *DockerSuite) TestCreateRM(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	// Test to make sure we can 'rm' a new container that is in
 	// "Created" state, and has ever been run. Test "rm -f" too.
 
@@ -235,6 +240,7 @@ func (s *DockerSuite) TestCreateRM(c *check.C) {
 }
 
 func (s *DockerSuite) TestCreateModeIpcContainer(c *check.C) {
+	// Uses Linux specific functionality (--ipc)
 	testRequires(c, DaemonIsLinux)
 	testRequires(c, SameHostDaemon, NotUserNamespace)
 
@@ -359,7 +365,7 @@ func (s *DockerTrustSuite) TestCreateWhenCertExpired(c *check.C) {
 
 func (s *DockerTrustSuite) TestTrustedCreateFromBadTrustServer(c *check.C) {
 	repoName := fmt.Sprintf("%v/dockerclievilcreate/trusted:latest", privateRegistryURL)
-	evilLocalConfigDir, err := ioutil.TempDir("", "evil-local-config-dir")
+	evilLocalConfigDir, err := ioutil.TempDir("", "evilcreate-local-config-dir")
 	c.Assert(err, check.IsNil)
 
 	// tag the image and upload it to the private registry
@@ -398,12 +404,16 @@ func (s *DockerTrustSuite) TestTrustedCreateFromBadTrustServer(c *check.C) {
 	c.Assert(err, check.IsNil)
 	c.Assert(string(out), checker.Contains, "Signing and pushing trust metadata", check.Commentf("Missing expected output on trusted push:\n%s", out))
 
-	// Now, try creating with the original client from this new trust server. This should fail.
+	// Now, try creating with the original client from this new trust server. This should fallback to our cached timestamp and metadata.
 	createCmd = exec.Command(dockerBinary, "create", repoName)
 	s.trustedCmd(createCmd)
 	out, _, err = runCommandWithOutput(createCmd)
-	c.Assert(err, check.Not(check.IsNil))
-	c.Assert(string(out), checker.Contains, "valid signatures did not meet threshold", check.Commentf("Missing expected output on trusted push:\n%s", out))
+	if err != nil {
+		c.Fatalf("Error falling back to cached trust data: %s\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Error while downloading remote metadata, using cached timestamp") {
+		c.Fatalf("Missing expected output on trusted create:\n%s", out)
+	}
 
 }
 
@@ -411,16 +421,40 @@ func (s *DockerSuite) TestCreateStopSignal(c *check.C) {
 	name := "test_create_stop_signal"
 	dockerCmd(c, "create", "--name", name, "--stop-signal", "9", "busybox")
 
-	res, err := inspectFieldJSON(name, "Config.StopSignal")
-	c.Assert(err, check.IsNil)
+	res := inspectFieldJSON(c, name, "Config.StopSignal")
 	c.Assert(res, checker.Contains, "9")
 
 }
 
 func (s *DockerSuite) TestCreateWithWorkdir(c *check.C) {
-	testRequires(c, DaemonIsLinux)
+	// TODO Windows. This requires further investigation for porting to
+	// Windows CI. Currently fails.
+	if daemonPlatform == "windows" {
+		c.Skip("Fails on Windows CI")
+	}
 	name := "foo"
-	dir := "/home/foo/bar"
+
+	prefix, slash := getPrefixAndSlashFromDaemonPlatform()
+	dir := prefix + slash + "home" + slash + "foo" + slash + "bar"
+
 	dockerCmd(c, "create", "--name", name, "-w", dir, "busybox")
-	dockerCmd(c, "cp", fmt.Sprintf("%s:%s", name, dir), "/tmp")
+	dockerCmd(c, "cp", fmt.Sprintf("%s:%s", name, dir), prefix+slash+"tmp")
+}
+
+func (s *DockerSuite) TestCreateWithInvalidLogOpts(c *check.C) {
+	name := "test-invalidate-log-opts"
+	out, _, err := dockerCmdWithError("create", "--name", name, "--log-opt", "invalid=true", "busybox")
+	c.Assert(err, checker.NotNil)
+	c.Assert(out, checker.Contains, "unknown log opt")
+
+	out, _ = dockerCmd(c, "ps", "-a")
+	c.Assert(out, checker.Not(checker.Contains), name)
+}
+
+// #20972
+func (s *DockerSuite) TestCreate64ByteHexID(c *check.C) {
+	out := inspectField(c, "busybox", "Id")
+	imageID := strings.TrimPrefix(strings.TrimSpace(string(out)), "sha256:")
+
+	dockerCmd(c, "create", imageID)
 }

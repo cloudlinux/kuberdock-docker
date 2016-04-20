@@ -11,16 +11,14 @@ import (
 	"github.com/Sirupsen/logrus"
 	apiserver "github.com/docker/docker/api/server"
 	"github.com/docker/docker/daemon"
+	"github.com/docker/docker/libcontainerd"
 	"github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/system"
-
-	_ "github.com/docker/docker/daemon/execdriver/native"
 )
 
 const defaultDaemonConfigFile = "/etc/docker/daemon.json"
 
 func setPlatformServerConfig(serverConfig *apiserver.Config, daemonCfg *daemon.Config) *apiserver.Config {
-	serverConfig.SocketGroup = daemonCfg.SocketGroup
 	serverConfig.EnableCors = daemonCfg.EnableCors
 	serverConfig.CorsHeaders = daemonCfg.CorsHeaders
 
@@ -65,4 +63,20 @@ func setupConfigReloadTrap(configFile string, flags *mflag.FlagSet, reload func(
 			}
 		}
 	}()
+}
+
+func (cli *DaemonCli) getPlatformRemoteOptions() []libcontainerd.RemoteOption {
+	opts := []libcontainerd.RemoteOption{
+		libcontainerd.WithDebugLog(cli.Config.Debug),
+	}
+	if cli.Config.ContainerdAddr != "" {
+		opts = append(opts, libcontainerd.WithRemoteAddr(cli.Config.ContainerdAddr))
+	} else {
+		opts = append(opts, libcontainerd.WithStartDaemon(true))
+	}
+	if daemon.UsingSystemd(cli.Config) {
+		args := []string{"--systemd-cgroup=true"}
+		opts = append(opts, libcontainerd.WithRuntimeArgs(args))
+	}
+	return opts
 }

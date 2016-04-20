@@ -74,6 +74,7 @@ parent = "smn_cli"
       -P, --publish-all             Publish all exposed ports to random ports
       -p, --publish=[]              Publish a container's port(s) to the host
       --pid=""                      PID namespace to use
+      --pids-limit=-1                Tune container pids limit (set -1 for unlimited), kernel >= 4.3
       --privileged                  Give extended privileges to this container
       --read-only                   Mount the container's root filesystem as read only
       --restart="no"                Restart policy (no, on-failure[:max-retry], always, unless-stopped)
@@ -84,14 +85,17 @@ parent = "smn_cli"
       --stop-signal="SIGTERM"       Signal to stop a container
       -t, --tty                     Allocate a pseudo-TTY
       -u, --user=""                 Username or UID (format: <name|uid>[:<group|gid>])
+      --userns=""                   Container user namespace
+                                    'host': Use the Docker host user namespace
+                                    '': Use the Docker daemon user namespace specified by `--userns-remap` option.
       --ulimit=[]                   Ulimit options
       --uts=""                      UTS namespace to use
       -v, --volume=[host-src:]container-dest[:<options>]
                                     Bind mount a volume. The comma-delimited
-                                    `options` are [rw|ro], [z|Z], or
-                                    [[r]shared|[r]slave|[r]private]. The
-                                    'host-src' is an absolute path or a name
-                                    value.
+                                    `options` are [rw|ro], [z|Z],
+                                    [[r]shared|[r]slave|[r]private], and
+                                    [nocopy]. The 'host-src' is an absolute path
+                                    or a name value.
       --volume-driver=""            Container's volume driver
       --volumes-from=[]             Mount volumes from the specified container(s)
       -w, --workdir=""              Working directory inside the container
@@ -110,7 +114,7 @@ For information on connecting a container to a network, see the ["*Docker networ
 
 ## Examples
 
-### Assign name and allocate psuedo-TTY (--name, -it)
+### Assign name and allocate pseudo-TTY (--name, -it)
 
     $ docker run --name test -it debian
     root@d6c0fe130dba:/# exit 13
@@ -220,7 +224,8 @@ system's interfaces.
 
     $ docker run -e MYVAR1 --env MYVAR2=foo --env-file ./env.list ubuntu bash
 
-This sets environmental variables in the container. For illustration all three
+This sets simple (non-array) environmental variables in the container. For
+illustration all three
 flags are shown here. Where `-e`, `--env` take an environment variable and
 value, or if no `=` is provided, then that variable's current value is passed
 through (i.e. `$MYVAR1` from the host is set to `$MYVAR1` in the container).
@@ -325,17 +330,17 @@ Guide.
 ### Connect a container to a network (--net)
 
 When you start a container use the `--net` flag to connect it to a network.
-This adds the `busybox` container to the `mynet` network.
+This adds the `busybox` container to the `my-net` network.
 
 ```bash
-$ docker run -itd --net=my-multihost-network busybox
+$ docker run -itd --net=my-net busybox
 ```
 
 You can also choose the IP addresses for the container with `--ip` and `--ip6`
 flags when you start the container on a user-defined network.
 
 ```bash
-$ docker run -itd --net=my-multihost-network --ip=10.10.9.75 busybox
+$ docker run -itd --net=my-net --ip=10.10.9.75 busybox
 ```
 
 If you want to add a running container to a network use the `docker network connect` subcommand.

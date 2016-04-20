@@ -11,23 +11,24 @@ import (
 )
 
 func (s *DockerSuite) TestRestartStoppedContainer(c *check.C) {
-	testRequires(c, DaemonIsLinux)
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "echo", "foobar")
+	dockerCmd(c, "run", "--name=test", "busybox", "echo", "foobar")
+	cleanedContainerID, err := getIDByName("test")
+	c.Assert(err, check.IsNil)
 
-	cleanedContainerID := strings.TrimSpace(out)
-	dockerCmd(c, "wait", cleanedContainerID)
-
-	out, _ = dockerCmd(c, "logs", cleanedContainerID)
+	out, _ := dockerCmd(c, "logs", cleanedContainerID)
 	c.Assert(out, checker.Equals, "foobar\n")
 
 	dockerCmd(c, "restart", cleanedContainerID)
+
+	// Wait until the container has stopped
+	err = waitInspect(cleanedContainerID, "{{.State.Running}}", "false", 20*time.Second)
+	c.Assert(err, checker.IsNil)
 
 	out, _ = dockerCmd(c, "logs", cleanedContainerID)
 	c.Assert(out, checker.Equals, "foobar\nfoobar\n")
 }
 
 func (s *DockerSuite) TestRestartRunningContainer(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	out, _ := dockerCmd(c, "run", "-d", "busybox", "sh", "-c", "echo foobar && sleep 30 && echo 'should not print this'")
 
 	cleanedContainerID := strings.TrimSpace(out)
@@ -48,94 +49,85 @@ func (s *DockerSuite) TestRestartRunningContainer(c *check.C) {
 
 // Test that restarting a container with a volume does not create a new volume on restart. Regression test for #819.
 func (s *DockerSuite) TestRestartWithVolumes(c *check.C) {
-	testRequires(c, DaemonIsLinux)
-	out, _ := dockerCmd(c, "run", "-d", "-v", "/test", "busybox", "top")
+	prefix, slash := getPrefixAndSlashFromDaemonPlatform()
+	out, _ := runSleepingContainer(c, "-d", "-v", prefix+slash+"test")
 
 	cleanedContainerID := strings.TrimSpace(out)
-	out, _ = dockerCmd(c, "inspect", "--format", "{{ len .Mounts }}", cleanedContainerID)
+	out, err := inspectFilter(cleanedContainerID, "len .Mounts")
+	c.Assert(err, check.IsNil, check.Commentf("failed to inspect %s: %s", cleanedContainerID, out))
 	out = strings.Trim(out, " \n\r")
 	c.Assert(out, checker.Equals, "1")
 
-	source, err := inspectMountSourceField(cleanedContainerID, "/test")
+	source, err := inspectMountSourceField(cleanedContainerID, prefix+slash+"test")
 	c.Assert(err, checker.IsNil)
 
 	dockerCmd(c, "restart", cleanedContainerID)
 
-	out, _ = dockerCmd(c, "inspect", "--format", "{{ len .Mounts }}", cleanedContainerID)
+	out, err = inspectFilter(cleanedContainerID, "len .Mounts")
+	c.Assert(err, check.IsNil, check.Commentf("failed to inspect %s: %s", cleanedContainerID, out))
 	out = strings.Trim(out, " \n\r")
 	c.Assert(out, checker.Equals, "1")
 
-	sourceAfterRestart, err := inspectMountSourceField(cleanedContainerID, "/test")
+	sourceAfterRestart, err := inspectMountSourceField(cleanedContainerID, prefix+slash+"test")
 	c.Assert(err, checker.IsNil)
 	c.Assert(source, checker.Equals, sourceAfterRestart)
 }
 
 func (s *DockerSuite) TestRestartPolicyNO(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	out, _ := dockerCmd(c, "run", "-d", "--restart=no", "busybox", "false")
 
 	id := strings.TrimSpace(string(out))
-	name, err := inspectField(id, "HostConfig.RestartPolicy.Name")
-	c.Assert(err, checker.IsNil)
+	name := inspectField(c, id, "HostConfig.RestartPolicy.Name")
 	c.Assert(name, checker.Equals, "no")
 }
 
 func (s *DockerSuite) TestRestartPolicyAlways(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	out, _ := dockerCmd(c, "run", "-d", "--restart=always", "busybox", "false")
 
 	id := strings.TrimSpace(string(out))
-	name, err := inspectField(id, "HostConfig.RestartPolicy.Name")
-	c.Assert(err, checker.IsNil)
+	name := inspectField(c, id, "HostConfig.RestartPolicy.Name")
 	c.Assert(name, checker.Equals, "always")
 
-	MaximumRetryCount, err := inspectField(id, "HostConfig.RestartPolicy.MaximumRetryCount")
-	c.Assert(err, checker.IsNil)
+	MaximumRetryCount := inspectField(c, id, "HostConfig.RestartPolicy.MaximumRetryCount")
 
 	// MaximumRetryCount=0 if the restart policy is always
 	c.Assert(MaximumRetryCount, checker.Equals, "0")
 }
 
 func (s *DockerSuite) TestRestartPolicyOnFailure(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	out, _ := dockerCmd(c, "run", "-d", "--restart=on-failure:1", "busybox", "false")
 
 	id := strings.TrimSpace(string(out))
-	name, err := inspectField(id, "HostConfig.RestartPolicy.Name")
-	c.Assert(err, checker.IsNil)
+	name := inspectField(c, id, "HostConfig.RestartPolicy.Name")
 	c.Assert(name, checker.Equals, "on-failure")
 
 }
 
 // a good container with --restart=on-failure:3
 // MaximumRetryCount!=0; RestartCount=0
-func (s *DockerSuite) TestContainerRestartwithGoodContainer(c *check.C) {
-	testRequires(c, DaemonIsLinux)
+func (s *DockerSuite) TestRestartContainerwithGoodContainer(c *check.C) {
 	out, _ := dockerCmd(c, "run", "-d", "--restart=on-failure:3", "busybox", "true")
 
 	id := strings.TrimSpace(string(out))
-	err := waitInspect(id, "{{ .State.Restarting }} {{ .State.Running }}", "false false", 5*time.Second)
+	err := waitInspect(id, "{{ .State.Restarting }} {{ .State.Running }}", "false false", 30*time.Second)
 	c.Assert(err, checker.IsNil)
 
-	count, err := inspectField(id, "RestartCount")
-	c.Assert(err, checker.IsNil)
+	count := inspectField(c, id, "RestartCount")
 	c.Assert(count, checker.Equals, "0")
 
-	MaximumRetryCount, err := inspectField(id, "HostConfig.RestartPolicy.MaximumRetryCount")
-	c.Assert(err, checker.IsNil)
+	MaximumRetryCount := inspectField(c, id, "HostConfig.RestartPolicy.MaximumRetryCount")
 	c.Assert(MaximumRetryCount, checker.Equals, "3")
 
 }
 
-func (s *DockerSuite) TestContainerRestartSuccess(c *check.C) {
-	testRequires(c, DaemonIsLinux, SameHostDaemon)
+func (s *DockerSuite) TestRestartContainerSuccess(c *check.C) {
+	testRequires(c, SameHostDaemon)
 
-	out, _ := dockerCmd(c, "run", "-d", "--restart=always", "busybox", "top")
+	out, _ := runSleepingContainer(c, "-d", "--restart=always")
 	id := strings.TrimSpace(out)
 	c.Assert(waitRun(id), check.IsNil)
 
-	pidStr, err := inspectField(id, "State.Pid")
-	c.Assert(err, check.IsNil)
+	pidStr := inspectField(c, id, "State.Pid")
 
 	pid, err := strconv.Atoi(pidStr)
 	c.Assert(err, check.IsNil)
@@ -147,15 +139,16 @@ func (s *DockerSuite) TestContainerRestartSuccess(c *check.C) {
 	err = p.Kill()
 	c.Assert(err, check.IsNil)
 
-	err = waitInspect(id, "{{.RestartCount}}", "1", 5*time.Second)
+	err = waitInspect(id, "{{.RestartCount}}", "1", 30*time.Second)
 	c.Assert(err, check.IsNil)
 
-	err = waitInspect(id, "{{.State.Status}}", "running", 5*time.Second)
+	err = waitInspect(id, "{{.State.Status}}", "running", 30*time.Second)
 	c.Assert(err, check.IsNil)
 }
 
-func (s *DockerSuite) TestUserDefinedNetworkWithRestartPolicy(c *check.C) {
-	testRequires(c, DaemonIsLinux, SameHostDaemon, NotUserNamespace)
+func (s *DockerSuite) TestRestartWithPolicyUserDefinedNetwork(c *check.C) {
+	// TODO Windows. This may be portable following HNS integration post TP5.
+	testRequires(c, DaemonIsLinux, SameHostDaemon, NotUserNamespace, NotArm)
 	dockerCmd(c, "network", "create", "-d", "bridge", "udNet")
 
 	dockerCmd(c, "run", "-d", "--net=udNet", "--name=first", "busybox", "top")
@@ -172,8 +165,7 @@ func (s *DockerSuite) TestUserDefinedNetworkWithRestartPolicy(c *check.C) {
 	c.Assert(err, check.IsNil)
 
 	// Now kill the second container and let the restart policy kick in
-	pidStr, err := inspectField("second", "State.Pid")
-	c.Assert(err, check.IsNil)
+	pidStr := inspectField(c, "second", "State.Pid")
 
 	pid, err := strconv.Atoi(pidStr)
 	c.Assert(err, check.IsNil)
@@ -195,4 +187,63 @@ func (s *DockerSuite) TestUserDefinedNetworkWithRestartPolicy(c *check.C) {
 	c.Assert(err, check.IsNil)
 	_, _, err = dockerCmdWithError("exec", "second", "ping", "-c", "1", "foo")
 	c.Assert(err, check.IsNil)
+}
+
+func (s *DockerSuite) TestRestartPolicyAfterRestart(c *check.C) {
+	testRequires(c, SameHostDaemon)
+
+	out, _ := runSleepingContainer(c, "-d", "--restart=always")
+	id := strings.TrimSpace(out)
+	c.Assert(waitRun(id), check.IsNil)
+
+	dockerCmd(c, "restart", id)
+
+	c.Assert(waitRun(id), check.IsNil)
+
+	pidStr := inspectField(c, id, "State.Pid")
+
+	pid, err := strconv.Atoi(pidStr)
+	c.Assert(err, check.IsNil)
+
+	p, err := os.FindProcess(pid)
+	c.Assert(err, check.IsNil)
+	c.Assert(p, check.NotNil)
+
+	err = p.Kill()
+	c.Assert(err, check.IsNil)
+
+	err = waitInspect(id, "{{.RestartCount}}", "1", 30*time.Second)
+	c.Assert(err, check.IsNil)
+
+	err = waitInspect(id, "{{.State.Status}}", "running", 30*time.Second)
+	c.Assert(err, check.IsNil)
+}
+
+func (s *DockerSuite) TestRestartContainerwithRestartPolicy(c *check.C) {
+	out1, _ := dockerCmd(c, "run", "-d", "--restart=on-failure:3", "busybox", "false")
+	out2, _ := dockerCmd(c, "run", "-d", "--restart=always", "busybox", "false")
+
+	id1 := strings.TrimSpace(string(out1))
+	id2 := strings.TrimSpace(string(out2))
+	err := waitInspect(id1, "{{ .State.Restarting }} {{ .State.Running }}", "false false", 30*time.Second)
+	c.Assert(err, checker.IsNil)
+
+	// TODO: fix racey problem during restart:
+	// https://jenkins.dockerproject.org/job/Docker-PRs-Win2Lin/24665/console
+	// Error response from daemon: Cannot restart container 6655f620d90b390527db23c0a15b3e46d86a58ecec20a5697ab228d860174251: remove /var/run/docker/libcontainerd/6655f620d90b390527db23c0a15b3e46d86a58ecec20a5697ab228d860174251/rootfs: device or resource busy
+	if _, _, err := dockerCmdWithError("restart", id1); err != nil {
+		// if restart met racey problem, try again
+		time.Sleep(500 * time.Millisecond)
+		dockerCmd(c, "restart", id1)
+	}
+	if _, _, err := dockerCmdWithError("restart", id2); err != nil {
+		// if restart met racey problem, try again
+		time.Sleep(500 * time.Millisecond)
+		dockerCmd(c, "restart", id2)
+	}
+
+	dockerCmd(c, "stop", id1)
+	dockerCmd(c, "stop", id2)
+	dockerCmd(c, "start", id1)
+	dockerCmd(c, "start", id2)
 }

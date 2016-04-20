@@ -7,6 +7,10 @@ package btrfs
 #include <dirent.h>
 #include <btrfs/ioctl.h>
 #include <btrfs/ctree.h>
+
+static void set_name_btrfs_ioctl_vol_args_v2(struct btrfs_ioctl_vol_args_v2* btrfs_struct, const char* value) {
+    snprintf(btrfs_struct->name, BTRFS_SUBVOL_NAME_MAX, "%s", value);
+}
 */
 import "C"
 
@@ -31,14 +35,13 @@ func init() {
 // Init returns a new BTRFS driver.
 // An error is returned if BTRFS is not supported.
 func Init(home string, options []string, uidMaps, gidMaps []idtools.IDMap) (graphdriver.Driver, error) {
-	rootdir := path.Dir(home)
 
-	var buf syscall.Statfs_t
-	if err := syscall.Statfs(rootdir, &buf); err != nil {
+	fsMagic, err := graphdriver.GetFSMagic(home)
+	if err != nil {
 		return nil, err
 	}
 
-	if graphdriver.FsMagic(buf.Type) != graphdriver.FsMagicBtrfs {
+	if fsMagic != graphdriver.FsMagicBtrfs {
 		return nil, graphdriver.ErrPrerequisites
 	}
 
@@ -160,9 +163,10 @@ func subvolSnapshot(src, dest, name string) error {
 
 	var args C.struct_btrfs_ioctl_vol_args_v2
 	args.fd = C.__s64(getDirFd(srcDir))
-	for i, c := range []byte(name) {
-		args.name[i] = C.char(c)
-	}
+
+	var cs = C.CString(name)
+	C.set_name_btrfs_ioctl_vol_args_v2(&args, cs)
+	C.free(unsafe.Pointer(cs))
 
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, getDirFd(destDir), C.BTRFS_IOC_SNAP_CREATE_V2,
 		uintptr(unsafe.Pointer(&args)))
@@ -257,9 +261,13 @@ func (d *Driver) Create(id, parent, mountLabel string) error {
 			return err
 		}
 	} else {
-		parentDir, err := d.Get(parent, "")
+		parentDir := d.subvolumesDirID(parent)
+		st, err := os.Stat(parentDir)
 		if err != nil {
 			return err
+		}
+		if !st.IsDir() {
+			return fmt.Errorf("%s: not a directory", parentDir)
 		}
 		if err := subvolSnapshot(parentDir, subvolumes, id); err != nil {
 			return err

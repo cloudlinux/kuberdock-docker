@@ -1,12 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os/exec"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,9 +15,8 @@ import (
 
 // This used to work, it test a log of PageSize-1 (gh#4851)
 func (s *DockerSuite) TestLogsContainerSmallerThanPage(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	testLen := 32767
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "sh", "-c", fmt.Sprintf("for i in $(seq 1 %d); do echo -n =; done; echo", testLen))
+	out, _ := dockerCmd(c, "run", "-d", "busybox", "sh", "-c", fmt.Sprintf("for i in $(seq 1 %d); do echo -n = >> a.a; done; echo >> a.a; cat a.a", testLen))
 
 	id := strings.TrimSpace(out)
 	dockerCmd(c, "wait", id)
@@ -31,9 +28,8 @@ func (s *DockerSuite) TestLogsContainerSmallerThanPage(c *check.C) {
 
 // Regression test: When going over the PageSize, it used to panic (gh#4851)
 func (s *DockerSuite) TestLogsContainerBiggerThanPage(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	testLen := 32768
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "sh", "-c", fmt.Sprintf("for i in $(seq 1 %d); do echo -n =; done; echo", testLen))
+	out, _ := dockerCmd(c, "run", "-d", "busybox", "sh", "-c", fmt.Sprintf("for i in $(seq 1 %d); do echo -n = >> a.a; done; echo >> a.a; cat a.a", testLen))
 
 	id := strings.TrimSpace(out)
 	dockerCmd(c, "wait", id)
@@ -45,9 +41,8 @@ func (s *DockerSuite) TestLogsContainerBiggerThanPage(c *check.C) {
 
 // Regression test: When going much over the PageSize, it used to block (gh#4851)
 func (s *DockerSuite) TestLogsContainerMuchBiggerThanPage(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	testLen := 33000
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "sh", "-c", fmt.Sprintf("for i in $(seq 1 %d); do echo -n =; done; echo", testLen))
+	out, _ := dockerCmd(c, "run", "-d", "busybox", "sh", "-c", fmt.Sprintf("for i in $(seq 1 %d); do echo -n = >> a.a; done; echo >> a.a; cat a.a", testLen))
 
 	id := strings.TrimSpace(out)
 	dockerCmd(c, "wait", id)
@@ -58,9 +53,8 @@ func (s *DockerSuite) TestLogsContainerMuchBiggerThanPage(c *check.C) {
 }
 
 func (s *DockerSuite) TestLogsTimestamps(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	testLen := 100
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "sh", "-c", fmt.Sprintf("for i in $(seq 1 %d); do echo =; done;", testLen))
+	out, _ := dockerCmd(c, "run", "-d", "busybox", "sh", "-c", fmt.Sprintf("for i in $(seq 1 %d); do echo = >> a.a; done; cat a.a", testLen))
 
 	id := strings.TrimSpace(out)
 	dockerCmd(c, "wait", id)
@@ -84,7 +78,6 @@ func (s *DockerSuite) TestLogsTimestamps(c *check.C) {
 }
 
 func (s *DockerSuite) TestLogsSeparateStderr(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	msg := "stderr_log"
 	out, _ := dockerCmd(c, "run", "-d", "busybox", "sh", "-c", fmt.Sprintf("echo %s 1>&2", msg))
 
@@ -101,6 +94,8 @@ func (s *DockerSuite) TestLogsSeparateStderr(c *check.C) {
 }
 
 func (s *DockerSuite) TestLogsStderrInStdout(c *check.C) {
+	// TODO Windows: Needs investigation why this fails. Obtained string includes
+	// a bunch of ANSI escape sequences before the "stderr_log" message.
 	testRequires(c, DaemonIsLinux)
 	msg := "stderr_log"
 	out, _ := dockerCmd(c, "run", "-d", "-t", "busybox", "sh", "-c", fmt.Sprintf("echo %s 1>&2", msg))
@@ -116,7 +111,6 @@ func (s *DockerSuite) TestLogsStderrInStdout(c *check.C) {
 }
 
 func (s *DockerSuite) TestLogsTail(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	testLen := 100
 	out, _ := dockerCmd(c, "run", "-d", "busybox", "sh", "-c", fmt.Sprintf("for i in $(seq 1 %d); do echo =; done;", testLen))
 
@@ -143,11 +137,9 @@ func (s *DockerSuite) TestLogsTail(c *check.C) {
 }
 
 func (s *DockerSuite) TestLogsFollowStopped(c *check.C) {
-	testRequires(c, DaemonIsLinux)
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "echo", "hello")
-
-	id := strings.TrimSpace(out)
-	dockerCmd(c, "wait", id)
+	dockerCmd(c, "run", "--name=test", "busybox", "echo", "hello")
+	id, err := getIDByName("test")
+	c.Assert(err, check.IsNil)
 
 	logsCmd := exec.Command(dockerBinary, "logs", "-f", id)
 	c.Assert(logsCmd.Start(), checker.IsNil)
@@ -161,13 +153,12 @@ func (s *DockerSuite) TestLogsFollowStopped(c *check.C) {
 	select {
 	case err := <-errChan:
 		c.Assert(err, checker.IsNil)
-	case <-time.After(1 * time.Second):
+	case <-time.After(30 * time.Second):
 		c.Fatal("Following logs is hanged")
 	}
 }
 
 func (s *DockerSuite) TestLogsSince(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	name := "testlogssince"
 	dockerCmd(c, "run", "--name="+name, "busybox", "/bin/sh", "-c", "for i in $(seq 1 3); do sleep 2; echo log$i; done")
 	out, _ := dockerCmd(c, "logs", "-t", name)
@@ -203,24 +194,41 @@ func (s *DockerSuite) TestLogsSince(c *check.C) {
 }
 
 func (s *DockerSuite) TestLogsSinceFutureFollow(c *check.C) {
+	// TODO Windows: Flakey on TP4. Enable for next technical preview.
 	testRequires(c, DaemonIsLinux)
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "/bin/sh", "-c", `for i in $(seq 1 5); do date +%s; sleep 1; done`)
-	id := strings.TrimSpace(out)
+	name := "testlogssincefuturefollow"
+	out, _ := dockerCmd(c, "run", "-d", "--name", name, "busybox", "/bin/sh", "-c", `for i in $(seq 1 5); do echo log$i; sleep 1; done`)
 
-	now := daemonTime(c).Unix()
-	since := now + 2
-	out, _ = dockerCmd(c, "logs", "-f", fmt.Sprintf("--since=%v", since), id)
+	// Extract one timestamp from the log file to give us a starting point for
+	// our `--since` argument. Because the log producer runs in the background,
+	// we need to check repeatedly for some output to be produced.
+	var timestamp string
+	for i := 0; i != 100 && timestamp == ""; i++ {
+		if out, _ = dockerCmd(c, "logs", "-t", name); out == "" {
+			time.Sleep(time.Millisecond * 100) // Retry
+		} else {
+			timestamp = strings.Split(strings.Split(out, "\n")[0], " ")[0]
+		}
+	}
+
+	c.Assert(timestamp, checker.Not(checker.Equals), "")
+	t, err := time.Parse(time.RFC3339Nano, timestamp)
+	c.Assert(err, check.IsNil)
+
+	since := t.Unix() + 2
+	out, _ = dockerCmd(c, "logs", "-t", "-f", fmt.Sprintf("--since=%v", since), name)
+	c.Assert(out, checker.Not(checker.HasLen), 0, check.Commentf("cannot read from empty log"))
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	c.Assert(lines, checker.Not(checker.HasLen), 0)
 	for _, v := range lines {
-		ts, err := strconv.ParseInt(v, 10, 64)
-		c.Assert(err, checker.IsNil, check.Commentf("cannot parse timestamp output from log: '%v'\nout=%s", v, out))
-		c.Assert(ts >= since, checker.Equals, true, check.Commentf("earlier log found. since=%v logdate=%v", since, ts))
+		ts, err := time.Parse(time.RFC3339Nano, strings.Split(v, " ")[0])
+		c.Assert(err, checker.IsNil, check.Commentf("cannot parse timestamp output from log: '%v'", v))
+		c.Assert(ts.Unix() >= since, checker.Equals, true, check.Commentf("earlier log found. since=%v logdate=%v", since, ts))
 	}
 }
 
 // Regression test for #8832
 func (s *DockerSuite) TestLogsFollowSlowStdoutConsumer(c *check.C) {
+	// TODO Windows: Consider enabling post-TP4. Too expensive to run on TP4
 	testRequires(c, DaemonIsLinux)
 	out, _ := dockerCmd(c, "run", "-d", "busybox", "/bin/sh", "-c", `usleep 600000;yes X | head -c 200000`)
 
@@ -249,29 +257,15 @@ func (s *DockerSuite) TestLogsFollowSlowStdoutConsumer(c *check.C) {
 	actual := bytes1 + bytes2
 	expected := 200000
 	c.Assert(actual, checker.Equals, expected)
-
 }
 
 func (s *DockerSuite) TestLogsFollowGoroutinesWithStdout(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	out, _ := dockerCmd(c, "run", "-d", "busybox", "/bin/sh", "-c", "while true; do echo hello; sleep 2; done")
 	id := strings.TrimSpace(out)
 	c.Assert(waitRun(id), checker.IsNil)
 
-	type info struct {
-		NGoroutines int
-	}
-	getNGoroutines := func() int {
-		var i info
-		status, b, err := sockRequest("GET", "/info", nil)
-		c.Assert(err, checker.IsNil)
-		c.Assert(status, checker.Equals, 200)
-		c.Assert(json.Unmarshal(b, &i), checker.IsNil)
-		return i.NGoroutines
-	}
-
-	nroutines := getNGoroutines()
-
+	nroutines, err := getGoroutineNumber()
+	c.Assert(err, checker.IsNil)
 	cmd := exec.Command(dockerBinary, "logs", "-f", id)
 	r, w := io.Pipe()
 	cmd.Stdout = w
@@ -288,62 +282,23 @@ func (s *DockerSuite) TestLogsFollowGoroutinesWithStdout(c *check.C) {
 	c.Assert(cmd.Process.Kill(), checker.IsNil)
 
 	// NGoroutines is not updated right away, so we need to wait before failing
-	t := time.After(30 * time.Second)
-	for {
-		select {
-		case <-t:
-			n := getNGoroutines()
-			c.Assert(n <= nroutines, checker.Equals, true, check.Commentf("leaked goroutines: expected less than or equal to %d, got: %d", nroutines, n))
-
-		default:
-			if n := getNGoroutines(); n <= nroutines {
-				return
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
-	}
+	c.Assert(waitForGoroutines(nroutines), checker.IsNil)
 }
 
 func (s *DockerSuite) TestLogsFollowGoroutinesNoOutput(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	out, _ := dockerCmd(c, "run", "-d", "busybox", "/bin/sh", "-c", "while true; do sleep 2; done")
 	id := strings.TrimSpace(out)
 	c.Assert(waitRun(id), checker.IsNil)
 
-	type info struct {
-		NGoroutines int
-	}
-	getNGoroutines := func() int {
-		var i info
-		status, b, err := sockRequest("GET", "/info", nil)
-		c.Assert(err, checker.IsNil)
-		c.Assert(status, checker.Equals, 200)
-		c.Assert(json.Unmarshal(b, &i), checker.IsNil)
-		return i.NGoroutines
-	}
-
-	nroutines := getNGoroutines()
-
+	nroutines, err := getGoroutineNumber()
+	c.Assert(err, checker.IsNil)
 	cmd := exec.Command(dockerBinary, "logs", "-f", id)
 	c.Assert(cmd.Start(), checker.IsNil)
 	time.Sleep(200 * time.Millisecond)
 	c.Assert(cmd.Process.Kill(), checker.IsNil)
 
 	// NGoroutines is not updated right away, so we need to wait before failing
-	t := time.After(30 * time.Second)
-	for {
-		select {
-		case <-t:
-			n := getNGoroutines()
-			c.Assert(n <= nroutines, checker.Equals, true, check.Commentf("leaked goroutines: expected less than or equal to %d, got: %d", nroutines, n))
-
-		default:
-			if n := getNGoroutines(); n <= nroutines {
-				return
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
-	}
+	c.Assert(waitForGoroutines(nroutines), checker.IsNil)
 }
 
 func (s *DockerSuite) TestLogsCLIContainerNotFound(c *check.C) {
