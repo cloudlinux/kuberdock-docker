@@ -1,14 +1,10 @@
 diff --git a/docker.te b/docker.te
-index b885fde..348f197 100644
+index 5adfe23..2e75835 100644
 --- a/docker.te
 +++ b/docker.te
-@@ -478,3 +478,9 @@ optional_policy(`
- 		auth_use_nsswitch(systemd_machined_t)
- 	')
+@@ -405,3 +405,5 @@ optional_policy(`
+ 
+      dontaudit svirt_sandbox_domain domain:key {search link};
  ')
 +
-+gen_require(`
-+    type svirt_lxc_net_t;
-+')
-+
-+allow svirt_lxc_net_t docker_var_lib_t:{ filesystem file dir fd lnk_file chr_file blk_file sock_file fifo_file } *;
++allow svirt_lxc_net_t etc_runtime_t:file setattr;

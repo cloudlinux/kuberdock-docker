@@ -9,7 +9,7 @@
 %global project docker
 %global repo %{project}
 %global common_path %{provider}.%{provider_tld}/%{project}
-%global d_version 1.10.2
+%global d_version 1.10.3
 
 %global import_path %{common_path}/%{repo}
 %global import_path_libcontainer %{common_path}/libcontainer
@@ -22,7 +22,7 @@
 
 # %%{name}-selinux stuff (prefix with ds_ for version/release etc.)
 # Some bits borrowed from the openstack-selinux package
-%global ds_commit dbfad05ac749c9cdf5df57f6a5132f4cc0493098
+%global ds_commit 5b4f257237ff58057e4160030ec75cdcc4d0f24a
 %global ds_shortcommit %(c=%{ds_commit}; echo ${c:0:7})
 %global selinuxtype targeted
 %global moduletype services
@@ -73,7 +73,9 @@ Source12: https://%{provider}.%{provider_tld}/fedora-cloud/%{name}-selinux/archi
 # Source13 is the source tarball for %%{name}-storage-setup
 Source13: https://%{provider}.%{provider_tld}/projectatomic/%{name}-storage-setup/archive/%{dss_commit}/%{name}-storage-setup-%{dss_shortcommit}.tar.gz
 
-Patch999: 0999-kuberdock-docker-selinux.patch
+#Patch997: 0997-label-overlay.patch
+#Patch998: 0998-allow_selinux_overlayfs.patch
+#Patch999: 0999-kuberdock-docker-selinux.patch
 
 BuildRequires: glibc-static
 BuildRequires: golang == 1.4.2
@@ -153,8 +155,10 @@ cp %{SOURCE6} .
 # unpack %%{name}-selinux
 tar zxf %{SOURCE12}
 # apply KuberDock patches
+#%patch997 -p1
+#%patch998 -p1
 pushd %{name}-selinux-%{ds_commit}
-%patch999 -p1
+#%patch999 -p1
 popd
 
 # untar %%{name}-utils tarball
