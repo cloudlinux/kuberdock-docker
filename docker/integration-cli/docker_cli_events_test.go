@@ -12,16 +12,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/docker/docker/daemon/events/testutils"
 	"github.com/docker/docker/pkg/integration/checker"
 	"github.com/go-check/check"
 )
 
 func (s *DockerSuite) TestEventsTimestampFormats(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	image := "busybox"
 
 	// Start stopwatch, generate an event
-	time.Sleep(1 * time.Second) // so that we don't grab events from previous test occured in the same second
+	time.Sleep(1 * time.Second) // so that we don't grab events from previous test occurred in the same second
 	start := daemonTime(c)
 	dockerCmd(c, "tag", image, "timestamptest:1")
 	dockerCmd(c, "rmi", "timestamptest:1")
@@ -45,7 +45,6 @@ func (s *DockerSuite) TestEventsTimestampFormats(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsUntag(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	image := "busybox"
 	dockerCmd(c, "tag", image, "utest:tag1")
 	dockerCmd(c, "tag", image, "utest:tag2")
@@ -66,12 +65,10 @@ func (s *DockerSuite) TestEventsUntag(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsContainerFailStartDie(c *check.C) {
-	out, _ := dockerCmd(c, "images", "-q")
-	image := strings.Split(out, "\n")[0]
-	_, _, err := dockerCmdWithError("run", "--name", "testeventdie", image, "blerg")
-	c.Assert(err, checker.NotNil, check.Commentf("Container run with command blerg should have failed, but it did not, out=%s", out))
+	_, _, err := dockerCmdWithError("run", "--name", "testeventdie", "busybox", "blerg")
+	c.Assert(err, checker.NotNil, check.Commentf("Container run with command blerg should have failed, but it did not"))
 
-	out, _ = dockerCmd(c, "events", "--since=0", fmt.Sprintf("--until=%d", daemonTime(c).Unix()))
+	out, _ := dockerCmd(c, "events", "--since=0", fmt.Sprintf("--until=%d", daemonTime(c).Unix()))
 	events := strings.Split(strings.TrimSpace(out), "\n")
 
 	nEvents := len(events)
@@ -94,6 +91,10 @@ func (s *DockerSuite) TestEventsContainerFailStartDie(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsLimit(c *check.C) {
+	// TODO Windows CI: This test is not reliable enough on Windows TP4. Reports
+	// multiple errors in the analytic log sometimes.
+	// [NetSetupHelper::InstallVirtualMiniport()@2153] NetSetup install of ROOT\VMS_MP\0001 failed with error 0x80070002
+	// This should be able to be enabled on TP5.
 	testRequires(c, DaemonIsLinux)
 	var waitGroup sync.WaitGroup
 	errChan := make(chan error, 17)
@@ -121,7 +122,6 @@ func (s *DockerSuite) TestEventsLimit(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsContainerEvents(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	containerID, _ := dockerCmd(c, "run", "--rm", "--name", "container-events-test", "busybox", "true")
 	containerID = strings.TrimSpace(containerID)
 
@@ -141,8 +141,34 @@ func (s *DockerSuite) TestEventsContainerEvents(c *check.C) {
 	c.Assert(containerEvents[4], checker.Equals, "destroy", check.Commentf(out))
 }
 
+func (s *DockerSuite) TestEventsContainerEventsAttrSort(c *check.C) {
+	since := daemonTime(c).Unix()
+	containerID, _ := dockerCmd(c, "run", "-d", "--name", "container-events-test", "busybox", "true")
+	containerID = strings.TrimSpace(containerID)
+
+	out, _ := dockerCmd(c, "events", fmt.Sprintf("--since=%d", since), fmt.Sprintf("--until=%d", daemonTime(c).Unix()))
+	events := strings.Split(out, "\n")
+
+	nEvents := len(events)
+	c.Assert(nEvents, checker.GreaterOrEqualThan, 3) //Missing expected event
+	matchedEvents := 0
+	for _, event := range events {
+		matches := eventstestutils.ScanMap(event)
+		if matches["id"] != containerID {
+			continue
+		}
+		if matches["eventType"] == "container" && matches["action"] == "create" {
+			matchedEvents++
+			c.Assert(out, checker.Contains, "(image=busybox, name=container-events-test)", check.Commentf("Event attributes not sorted"))
+		} else if matches["eventType"] == "container" && matches["action"] == "start" {
+			matchedEvents++
+			c.Assert(out, checker.Contains, "(image=busybox, name=container-events-test)", check.Commentf("Event attributes not sorted"))
+		}
+	}
+	c.Assert(matchedEvents, checker.Equals, 2)
+}
+
 func (s *DockerSuite) TestEventsContainerEventsSinceUnixEpoch(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	dockerCmd(c, "run", "--rm", "--name", "since-epoch-test", "busybox", "true")
 	timeBeginning := time.Unix(0, 0).Format(time.RFC3339Nano)
 	timeBeginning = strings.Replace(timeBeginning, "Z", ".000000000Z", -1)
@@ -163,7 +189,6 @@ func (s *DockerSuite) TestEventsContainerEventsSinceUnixEpoch(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsImageTag(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	time.Sleep(1 * time.Second) // because API has seconds granularity
 	since := daemonTime(c).Unix()
 	image := "testimageevents:tag"
@@ -177,12 +202,13 @@ func (s *DockerSuite) TestEventsImageTag(c *check.C) {
 	c.Assert(events, checker.HasLen, 1, check.Commentf("was expecting 1 event. out=%s", out))
 	event := strings.TrimSpace(events[0])
 
-	matches := parseEventText(event)
+	matches := eventstestutils.ScanMap(event)
 	c.Assert(matchEventID(matches, image), checker.True, check.Commentf("matches: %v\nout:\n%s", matches, out))
 	c.Assert(matches["action"], checker.Equals, "tag")
 }
 
 func (s *DockerSuite) TestEventsImagePull(c *check.C) {
+	// TODO Windows: Enable this test once pull and reliable image names are available
 	testRequires(c, DaemonIsLinux)
 	since := daemonTime(c).Unix()
 	testRequires(c, Network)
@@ -195,13 +221,15 @@ func (s *DockerSuite) TestEventsImagePull(c *check.C) {
 
 	events := strings.Split(strings.TrimSpace(out), "\n")
 	event := strings.TrimSpace(events[len(events)-1])
-	matches := parseEventText(event)
+	matches := eventstestutils.ScanMap(event)
 	c.Assert(matches["id"], checker.Equals, "hello-world:latest")
 	c.Assert(matches["action"], checker.Equals, "pull")
 
 }
 
 func (s *DockerSuite) TestEventsImageImport(c *check.C) {
+	// TODO Windows CI. This should be portable once export/import are
+	// more reliable (@swernli)
 	testRequires(c, DaemonIsLinux)
 
 	out, _ := dockerCmd(c, "run", "-d", "busybox", "true")
@@ -218,14 +246,12 @@ func (s *DockerSuite) TestEventsImageImport(c *check.C) {
 	out, _ = dockerCmd(c, "events", fmt.Sprintf("--since=%d", since), fmt.Sprintf("--until=%d", daemonTime(c).Unix()), "--filter", "event=import")
 	events := strings.Split(strings.TrimSpace(out), "\n")
 	c.Assert(events, checker.HasLen, 1)
-	matches := parseEventText(events[0])
+	matches := eventstestutils.ScanMap(events[0])
 	c.Assert(matches["id"], checker.Equals, imageRef, check.Commentf("matches: %v\nout:\n%s\n", matches, out))
 	c.Assert(matches["action"], checker.Equals, "import", check.Commentf("matches: %v\nout:\n%s\n", matches, out))
 }
 
 func (s *DockerSuite) TestEventsFilters(c *check.C) {
-	testRequires(c, DaemonIsLinux)
-
 	since := daemonTime(c).Unix()
 	dockerCmd(c, "run", "--rm", "busybox", "true")
 	dockerCmd(c, "run", "--rm", "busybox", "true")
@@ -242,7 +268,6 @@ func (s *DockerSuite) TestEventsFilters(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsFilterImageName(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	since := daemonTime(c).Unix()
 
 	out, _ := dockerCmd(c, "run", "--name", "container_1", "-d", "busybox:latest", "true")
@@ -272,7 +297,6 @@ func (s *DockerSuite) TestEventsFilterImageName(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsFilterLabels(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	since := daemonTime(c).Unix()
 	label := "io.docker.testing=foo"
 
@@ -299,7 +323,6 @@ func (s *DockerSuite) TestEventsFilterLabels(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsFilterImageLabels(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	since := daemonTime(c).Unix()
 	name := "labelfiltertest"
 	label := "io.docker.testing=image"
@@ -332,14 +355,12 @@ func (s *DockerSuite) TestEventsFilterImageLabels(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsFilterContainer(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	since := fmt.Sprintf("%d", daemonTime(c).Unix())
 	nameID := make(map[string]string)
 
 	for _, name := range []string{"container_1", "container_2"} {
 		dockerCmd(c, "run", "--name", name, "busybox", "true")
-		id, err := inspectField(name, "Id")
-		c.Assert(err, checker.IsNil)
+		id := inspectField(c, name, "Id")
 		nameID[name] = id
 	}
 
@@ -350,7 +371,7 @@ func (s *DockerSuite) TestEventsFilterContainer(c *check.C) {
 			return fmt.Errorf("expected 4 events, got %v", events)
 		}
 		for _, event := range events {
-			matches := parseEventText(event)
+			matches := eventstestutils.ScanMap(event)
 			if !matchEventID(matches, id) {
 				return fmt.Errorf("expected event for container id %s: %s - parsed container id: %s", id, event, matches["id"])
 			}
@@ -372,10 +393,11 @@ func (s *DockerSuite) TestEventsFilterContainer(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsCommit(c *check.C) {
+	// Problematic on Windows as cannot commit a running container
 	testRequires(c, DaemonIsLinux)
 	since := daemonTime(c).Unix()
 
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "top")
+	out, _ := runSleepingContainer(c, "-d")
 	cID := strings.TrimSpace(out)
 	c.Assert(waitRun(cID), checker.IsNil)
 
@@ -387,13 +409,12 @@ func (s *DockerSuite) TestEventsCommit(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsCopy(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	since := daemonTime(c).Unix()
 
 	// Build a test image.
 	id, err := buildImage("cpimg", `
 		  FROM busybox
-		  RUN echo HI > /tmp/file`, true)
+		  RUN echo HI > /file`, true)
 	c.Assert(err, checker.IsNil, check.Commentf("Couldn't create image"))
 
 	// Create an empty test file.
@@ -405,22 +426,21 @@ func (s *DockerSuite) TestEventsCopy(c *check.C) {
 
 	dockerCmd(c, "create", "--name=cptest", id)
 
-	dockerCmd(c, "cp", "cptest:/tmp/file", tempFile.Name())
+	dockerCmd(c, "cp", "cptest:/file", tempFile.Name())
 
 	out, _ := dockerCmd(c, "events", "--since=0", "-f", "container=cptest", "--until="+strconv.Itoa(int(since)))
 	c.Assert(out, checker.Contains, "archive-path", check.Commentf("Missing 'archive-path' log event\n"))
 
-	dockerCmd(c, "cp", tempFile.Name(), "cptest:/tmp/filecopy")
+	dockerCmd(c, "cp", tempFile.Name(), "cptest:/filecopy")
 
 	out, _ = dockerCmd(c, "events", "--since=0", "-f", "container=cptest", "--until="+strconv.Itoa(int(since)))
 	c.Assert(out, checker.Contains, "extract-to-dir", check.Commentf("Missing 'extract-to-dir' log event"))
 }
 
 func (s *DockerSuite) TestEventsResize(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	since := daemonTime(c).Unix()
 
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "top")
+	out, _ := runSleepingContainer(c, "-d")
 	cID := strings.TrimSpace(out)
 	c.Assert(waitRun(cID), checker.IsNil)
 
@@ -436,10 +456,11 @@ func (s *DockerSuite) TestEventsResize(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsAttach(c *check.C) {
+	// TODO Windows CI: Figure out why this test fails intermittently (TP4 and TP5).
 	testRequires(c, DaemonIsLinux)
 	since := daemonTime(c).Unix()
 
-	out, _ := dockerCmd(c, "run", "-di", "busybox", "/bin/cat")
+	out, _ := dockerCmd(c, "run", "-di", "busybox", "cat")
 	cID := strings.TrimSpace(out)
 
 	cmd := exec.Command(dockerBinary, "attach", cID)
@@ -461,14 +482,13 @@ func (s *DockerSuite) TestEventsAttach(c *check.C) {
 
 	c.Assert(stdin.Close(), checker.IsNil)
 
-	dockerCmd(c, "stop", cID)
+	dockerCmd(c, "kill", cID)
 
 	out, _ = dockerCmd(c, "events", "--since=0", "-f", "container="+cID, "--until="+strconv.Itoa(int(since)))
 	c.Assert(out, checker.Contains, "attach", check.Commentf("Missing 'attach' log event"))
 }
 
 func (s *DockerSuite) TestEventsRename(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	since := daemonTime(c).Unix()
 
 	dockerCmd(c, "run", "--name", "oldName", "busybox", "true")
@@ -479,10 +499,11 @@ func (s *DockerSuite) TestEventsRename(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsTop(c *check.C) {
+	// Problematic on Windows as Windows does not support top
 	testRequires(c, DaemonIsLinux)
 	since := daemonTime(c).Unix()
 
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "top")
+	out, _ := runSleepingContainer(c, "-d")
 	cID := strings.TrimSpace(out)
 	c.Assert(waitRun(cID), checker.IsNil)
 
@@ -495,7 +516,6 @@ func (s *DockerSuite) TestEventsTop(c *check.C) {
 
 // #13753
 func (s *DockerSuite) TestEventsDefaultEmpty(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	dockerCmd(c, "run", "busybox")
 	out, _ := dockerCmd(c, "events", fmt.Sprintf("--until=%d", daemonTime(c).Unix()))
 	c.Assert(strings.TrimSpace(out), checker.Equals, "")
@@ -503,6 +523,8 @@ func (s *DockerSuite) TestEventsDefaultEmpty(c *check.C) {
 
 // #14316
 func (s *DockerRegistrySuite) TestEventsImageFilterPush(c *check.C) {
+	// Problematic to port for Windows CI during TP4/TP5 timeframe while
+	// not supporting push
 	testRequires(c, DaemonIsLinux)
 	testRequires(c, Network)
 	since := daemonTime(c).Unix()
@@ -521,7 +543,6 @@ func (s *DockerRegistrySuite) TestEventsImageFilterPush(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsFilterType(c *check.C) {
-	testRequires(c, DaemonIsLinux)
 	since := daemonTime(c).Unix()
 	name := "labelfiltertest"
 	label := "io.docker.testing=image"
@@ -575,8 +596,6 @@ func (s *DockerSuite) TestEventsFilterType(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsFilterImageInContainerAction(c *check.C) {
-	testRequires(c, DaemonIsLinux)
-
 	since := daemonTime(c).Unix()
 	dockerCmd(c, "run", "--name", "test-container", "-d", "busybox", "true")
 	waitRun("test-container")
@@ -584,4 +603,45 @@ func (s *DockerSuite) TestEventsFilterImageInContainerAction(c *check.C) {
 	out, _ := dockerCmd(c, "events", "--filter", "image=busybox", fmt.Sprintf("--since=%d", since), fmt.Sprintf("--until=%d", daemonTime(c).Unix()))
 	events := strings.Split(strings.TrimSpace(out), "\n")
 	c.Assert(len(events), checker.GreaterThan, 1, check.Commentf(out))
+}
+
+func (s *DockerSuite) TestEventsContainerRestart(c *check.C) {
+	dockerCmd(c, "run", "-d", "--name=testEvent", "--restart=on-failure:3", "busybox", "false")
+
+	// wait until test2 is auto removed.
+	waitTime := 10 * time.Second
+	if daemonPlatform == "windows" {
+		// nslookup isn't present in Windows busybox. Is built-in.
+		waitTime = 90 * time.Second
+	}
+
+	err := waitInspect("testEvent", "{{ .State.Restarting }} {{ .State.Running }}", "false false", waitTime)
+	c.Assert(err, checker.IsNil)
+
+	var (
+		createCount int
+		startCount  int
+		dieCount    int
+	)
+	out, _ := dockerCmd(c, "events", "--since=0", fmt.Sprintf("--until=%d", daemonTime(c).Unix()), "-f", "container=testEvent")
+	events := strings.Split(strings.TrimSpace(out), "\n")
+
+	nEvents := len(events)
+	c.Assert(nEvents, checker.GreaterOrEqualThan, 1) //Missing expected event
+	actions := eventActionsByIDAndType(c, events, "testEvent", "container")
+
+	for _, a := range actions {
+		switch a {
+		case "create":
+			createCount++
+		case "start":
+			startCount++
+		case "die":
+			dieCount++
+		}
+	}
+	c.Assert(createCount, checker.Equals, 1, check.Commentf("testEvent should be created 1 times: %v", actions))
+	c.Assert(startCount, checker.Equals, 4, check.Commentf("testEvent should start 4 times: %v", actions))
+	c.Assert(dieCount, checker.Equals, 4, check.Commentf("testEvent should die 4 times: %v", actions))
+
 }

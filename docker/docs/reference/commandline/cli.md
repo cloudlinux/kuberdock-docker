@@ -67,7 +67,7 @@ variables.
 ## Configuration files
 
 By default, the Docker command line stores its configuration files in a
-directory called `.docker` within your `HOME` directory. However, you can
+directory called `.docker` within your `$HOME` directory. However, you can
 specify a different location via the `DOCKER_CONFIG` environment variable
 or the `--config` command line option. If both are specified, then the
 `--config` option overrides the `DOCKER_CONFIG` environment variable.
@@ -111,7 +111,7 @@ property. The format of the `<sequence>` is a comma-separated list of either
 a letter [a-Z], or the `ctrl-` combined with any of the following:
 
 * `a-z` (a single lowercase alpha character )
-* `@` (ampersand)
+* `@` (at sign)
 * `[` (left bracket)
 * `\\` (two backward slashes)
 *  `_` (underscore)

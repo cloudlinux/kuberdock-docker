@@ -7,10 +7,11 @@ import (
 
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/filters"
+	"golang.org/x/net/context"
 )
 
 // ContainerList returns the list of containers in the docker host.
-func (cli *Client) ContainerList(options types.ContainerListOptions) ([]types.Container, error) {
+func (cli *Client) ContainerList(ctx context.Context, options types.ContainerListOptions) ([]types.Container, error) {
 	query := url.Values{}
 
 	if options.All {
@@ -42,13 +43,13 @@ func (cli *Client) ContainerList(options types.ContainerListOptions) ([]types.Co
 		query.Set("filters", filterJSON)
 	}
 
-	resp, err := cli.get("/containers/json", query, nil)
+	resp, err := cli.get(ctx, "/containers/json", query, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer ensureReaderClosed(resp)
 
 	var containers []types.Container
 	err = json.NewDecoder(resp.body).Decode(&containers)
+	ensureReaderClosed(resp)
 	return containers, err
 }

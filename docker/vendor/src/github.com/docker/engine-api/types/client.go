@@ -127,7 +127,7 @@ type ImageBuildOptions struct {
 	Remove         bool
 	ForceRemove    bool
 	PullParent     bool
-	IsolationLevel container.IsolationLevel
+	Isolation      container.Isolation
 	CPUSetCPUs     string
 	CPUSetMems     string
 	CPUShares      int64
@@ -142,6 +142,7 @@ type ImageBuildOptions struct {
 	BuildArgs      map[string]string
 	AuthConfigs    map[string]AuthConfig
 	Context        io.Reader
+	Labels         map[string]string
 }
 
 // ImageBuildResponse holds information

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"golang.org/x/net/context"
+
 	Cli "github.com/docker/docker/cli"
 	flag "github.com/docker/docker/pkg/mflag"
 )
@@ -20,8 +22,8 @@ func (cli *DockerCli) CmdKill(args ...string) error {
 
 	var errs []string
 	for _, name := range cmd.Args() {
-		if err := cli.client.ContainerKill(name, *signal); err != nil {
-			errs = append(errs, fmt.Sprintf("Failed to kill container (%s): %s", name, err))
+		if err := cli.client.ContainerKill(context.Background(), name, *signal); err != nil {
+			errs = append(errs, err.Error())
 		} else {
 			fmt.Fprintf(cli.out, "%s\n", name)
 		}

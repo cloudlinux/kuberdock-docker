@@ -53,6 +53,10 @@ The following plugins exist:
   another volume plugin that provides multi-host volumes management for Docker
   using GlusterFS.
 
+* The [Horcrux Volume Plugin](https://github.com/muthu-r/horcrux) allows on-demand,
+  version controlled access to your data. Horcrux is an open-source plugin,
+  written in Go, and supports SCP, [Minio](https://www.minio.io) and Amazon S3.
+
 * The [IPFS Volume Plugin](http://github.com/vdemeester/docker-volume-ipfs)
   is an open source volume plugin that allows using an
   [ipfs](https://ipfs.io/) filesystem as a volume.
@@ -88,6 +92,17 @@ The following plugins exist:
   applications. Weave networks are resilient, partition tolerant,
   secure and work in partially connected networks, and other adverse
   environments - all configured with delightful simplicity.
+
+* The [Kuryr Network Plugin](https://github.com/openstack/kuryr) is
+  developed as part of the OpenStack Kuryr project and implements the
+  Docker networking (libnetwork) remote driver API by utilizing
+  Neutron, the OpenStack networking service. It includes an IPAM
+  driver as well.
+
+* The [Local Persist Plugin](https://github.com/CWSpear/local-persist) 
+  extends the default `local` driver's functionality by allowing you specify 
+  a mountpoint anywhere on the host, which enables the files to *always persist*, 
+  even if the volume is removed via `docker volume rm`.
 
 ## Troubleshooting a plugin
 

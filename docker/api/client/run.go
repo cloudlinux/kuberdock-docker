@@ -7,15 +7,21 @@ import (
 	"runtime"
 	"strings"
 
+	"golang.org/x/net/context"
+
 	"github.com/Sirupsen/logrus"
 	Cli "github.com/docker/docker/cli"
-	derr "github.com/docker/docker/errors"
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/promise"
 	"github.com/docker/docker/pkg/signal"
 	runconfigopts "github.com/docker/docker/runconfig/opts"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/libnetwork/resolvconf/dns"
+)
+
+const (
+	errCmdNotFound          = "not found or does not exist."
+	errCmdCouldNotBeInvoked = "could not be invoked."
 )
 
 func (cid *cidFile) Close() error {
@@ -43,21 +49,16 @@ func (cid *cidFile) Write(id string) error {
 // return 125 for generic docker daemon failures
 func runStartContainerErr(err error) error {
 	trimmedErr := strings.Trim(err.Error(), "Error response from daemon: ")
-	statusError := Cli.StatusError{}
-	derrCmdNotFound := derr.ErrorCodeCmdNotFound.Message()
-	derrCouldNotInvoke := derr.ErrorCodeCmdCouldNotBeInvoked.Message()
-	derrNoSuchImage := derr.ErrorCodeNoSuchImageHash.Message()
-	derrNoSuchImageTag := derr.ErrorCodeNoSuchImageTag.Message()
-	switch trimmedErr {
-	case derrCmdNotFound:
-		statusError = Cli.StatusError{StatusCode: 127}
-	case derrCouldNotInvoke:
-		statusError = Cli.StatusError{StatusCode: 126}
-	case derrNoSuchImage, derrNoSuchImageTag:
-		statusError = Cli.StatusError{StatusCode: 125}
-	default:
-		statusError = Cli.StatusError{StatusCode: 125}
+	statusError := Cli.StatusError{StatusCode: 125}
+
+	if strings.HasPrefix(trimmedErr, "Container command") {
+		if strings.Contains(trimmedErr, errCmdNotFound) {
+			statusError = Cli.StatusError{StatusCode: 127}
+		} else if strings.Contains(trimmedErr, errCmdCouldNotBeInvoked) {
+			statusError = Cli.StatusError{StatusCode: 126}
+		}
 	}
+
 	return statusError
 }
 
@@ -203,7 +204,7 @@ func (cli *DockerCli) CmdRun(args ...string) error {
 			DetachKeys:  cli.configFile.DetachKeys,
 		}
 
-		resp, err := cli.client.ContainerAttach(options)
+		resp, err := cli.client.ContainerAttach(context.Background(), options)
 		if err != nil {
 			return err
 		}
@@ -218,20 +219,16 @@ func (cli *DockerCli) CmdRun(args ...string) error {
 		})
 	}
 
-	defer func() {
-		if *flAutoRemove {
-			options := types.ContainerRemoveOptions{
-				ContainerID:   createResponse.ID,
-				RemoveVolumes: true,
+	if *flAutoRemove {
+		defer func() {
+			if err := cli.removeContainer(createResponse.ID, true, false, false); err != nil {
+				fmt.Fprintf(cli.err, "%v\n", err)
 			}
-			if err := cli.client.ContainerRemove(options); err != nil {
-				fmt.Fprintf(cli.err, "Error deleting container: %s\n", err)
-			}
-		}
-	}()
+		}()
+	}
 
 	//start the container
-	if err := cli.client.ContainerStart(createResponse.ID); err != nil {
+	if err := cli.client.ContainerStart(context.Background(), createResponse.ID); err != nil {
 		cmd.ReportError(err.Error(), false)
 		return runStartContainerErr(err)
 	}
@@ -262,7 +259,7 @@ func (cli *DockerCli) CmdRun(args ...string) error {
 	if *flAutoRemove {
 		// Autoremove: wait for the container to finish, retrieve
 		// the exit code and remove the container
-		if status, err = cli.client.ContainerWait(createResponse.ID); err != nil {
+		if status, err = cli.client.ContainerWait(context.Background(), createResponse.ID); err != nil {
 			return runStartContainerErr(err)
 		}
 		if _, status, err = getExitCode(cli, createResponse.ID); err != nil {
@@ -272,7 +269,7 @@ func (cli *DockerCli) CmdRun(args ...string) error {
 		// No Autoremove: Simply retrieve the exit code
 		if !config.Tty {
 			// In non-TTY mode, we can't detach, so we must wait for container exit
-			if status, err = cli.client.ContainerWait(createResponse.ID); err != nil {
+			if status, err = cli.client.ContainerWait(context.Background(), createResponse.ID); err != nil {
 				return err
 			}
 		} else {

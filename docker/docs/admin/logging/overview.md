@@ -26,6 +26,8 @@ container's logging driver. The following options are supported:
 | `fluentd`   | Fluentd logging driver for Docker. Writes log messages to `fluentd` (forward input).                                          |
 | `awslogs`   | Amazon CloudWatch Logs logging driver for Docker. Writes log messages to Amazon CloudWatch Logs.                              |
 | `splunk`    | Splunk logging driver for Docker. Writes log messages to `splunk` using HTTP Event Collector.                                 |
+| `etwlogs`   | ETW logging driver for Docker on Windows. Writes log messages as ETW events.                                                  |
+| `gcplogs`   | Google Cloud Logging driver for Docker. Writes log messages to Google Cloud Logging.                                          |
 
 The `docker logs`command is available only for the `json-file` and `journald`
 logging drivers.
@@ -78,6 +80,7 @@ The following logging options are supported for the `syslog` logging driver:
     --log-opt syslog-tls-key=/etc/ca-certificates/custom/key.pem
     --log-opt syslog-tls-skip-verify=true
     --log-opt tag="mailer"
+    --log-opt syslog-format=[rfc5424|rfc3164] 
 
 `syslog-address` specifies the remote syslog server address where the driver connects to.
 If not specified it defaults to the local unix socket of the running system.
@@ -129,6 +132,11 @@ By default, Docker uses the first 12 characters of the container ID to tag log m
 Refer to the [log tag option documentation](log_tags.md) for customizing
 the log tag format.
 
+`syslog-format` specifies syslog message format to use when logging.
+If not specified it defaults to the local unix syslog format without hostname specification.
+Specify rfc3164 to perform logging in RFC-3164 compatible format. Specify rfc5424 to perform 
+logging in RFC-5424 compatible format
+
 
 ## journald options
 
@@ -144,6 +152,8 @@ The GELF logging driver supports the following options:
     --log-opt tag="database"
     --log-opt labels=label1,label2
     --log-opt env=env1,env2
+    --log-opt gelf-compression-type=gzip
+    --log-opt gelf-compression-level=1
 
 The `gelf-address` option specifies the remote GELF server address that the
 driver connects to. Currently, only `udp` is supported as the transport and you must
@@ -165,21 +175,34 @@ underscore (`_`).
     "_fizz": "buzz",
     // […]
 
+The `gelf-compression-type` option can be used to change how the GELF driver
+compresses each log message. The accepted values are `gzip`, `zlib` and `none`.
+`gzip` is chosen by default.
+
+The `gelf-compression-level` option can be used to change the level of compresssion
+when `gzip` or `zlib` is selected as `gelf-compression-type`. Accepted value
+must be from from -1 to 9 (BestCompression). Higher levels typically
+run slower but compress more. Default value is 1 (BestSpeed).
 
 ## fluentd options
 
 You can use the `--log-opt NAME=VALUE` flag to specify these additional Fluentd logging driver options.
 
  - `fluentd-address`: specify `host:port` to connect [localhost:24224]
- - `tag`: specify tag for `fluentd` message,
+ - `tag`: specify tag for `fluentd` message
+ - `fluentd-buffer-limit`: specify the maximum size of the fluentd log buffer [8MB]
+ - `fluentd-retry-wait`: initial delay before a connection retry (after which it increases exponentially) [1000ms]
+ - `fluentd-max-retries`: maximum number of connection retries before abrupt failure of docker [1073741824]
+ - `fluentd-async-connect`: whether to block on initial connection or not [false]
 
 For example, to specify both additional options:
 
 `docker run --log-driver=fluentd --log-opt fluentd-address=localhost:24224 --log-opt tag=docker.{{.Name}}`
 
-If container cannot connect to the Fluentd daemon on the specified address,
-the container stops immediately. For detailed information on working with this
-logging driver, see [the fluentd logging driver](fluentd.md)
+If container cannot connect to the Fluentd daemon on the specified address and
+`fluentd-async-connect` is not enabled, the container stops immediately.
+For detailed information on working with this logging driver,
+see [the fluentd logging driver](fluentd.md)
 
 
 ## Specify Amazon CloudWatch Logs options
@@ -201,4 +224,23 @@ The Splunk logging driver requires the following options:
     --log-opt splunk-url=https://your_splunk_instance:8088
 
 For detailed information about working with this logging driver, see the [Splunk logging driver](splunk.md)
+reference documentation.
+
+## ETW logging driver options
+
+The etwlogs logging driver does not require any options to be specified. This logging driver will forward each log message
+as an ETW event. An ETW listener can then be created to listen for these events. 
+
+For detailed information on working with this logging driver, see [the ETW logging driver](etwlogs.md) reference documentation.
+
+## Google Cloud Logging
+
+The Google Cloud Logging driver supports the following options:
+
+    --log-opt gcp-project=<gcp_projext>
+    --log-opt labels=<label1>,<label2>
+    --log-opt env=<envvar1>,<envvar2>
+    --log-opt log-cmd=true
+
+For detailed information about working with this logging driver, see the [Google Cloud Logging driver](gcplogs.md).
 reference documentation.

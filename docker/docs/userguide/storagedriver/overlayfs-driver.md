@@ -81,7 +81,7 @@ Docker image comprising four layers.
     Status: Downloaded newer image for ubuntu:latest
 
 Each image layer has it's own directory under `/var/lib/docker/overlay/`. This 
-is where the the contents of each image layer are stored. 
+is where the contents of each image layer are stored. 
 
 The output of the command below shows the four directories that store the 
 contents of each image layer just pulled. However, as can be seen, the image 
@@ -111,7 +111,7 @@ directories.
     drwxr-xr-x 4 root root 4096 Oct 28 11:06 upper
     drwx------ 3 root root 4096 Oct 28 11:06 work
 
-These four filesystem objects are all artefacts of OverlayFS. The "lower-id" 
+These four filesystem objects are all artifacts of OverlayFS. The "lower-id" 
 file contains the ID of the top layer of the image the container is based on. 
 This is used by OverlayFS as the "lowerdir".
 
