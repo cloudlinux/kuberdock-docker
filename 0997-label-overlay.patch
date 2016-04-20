@@ -1,0 +1,22 @@
+diff --git a/daemon/graphdriver/overlay/overlay.go b/daemon/graphdriver/overlay/overlay.go
+NOTE(mlobur): Taken from https://github.com/coreos/docker/pull/10/commits/6962060e12b3431e90c955415a453920bf7a3128?diff=split
+index bd92695..e88a41d 100644
+--- a/daemon/graphdriver/overlay/overlay.go
++++ b/daemon/graphdriver/overlay/overlay.go
+@@ -368,6 +368,16 @@ func (d *Driver) Get(id string, mountLabel string) (string, error) {
+ 	workDir := path.Join(dir, "work")
+ 	mergedDir := path.Join(dir, "merged")
+ 
++	if err = label.Relabel(upperDir, mountLabel, false); err != nil {
++		return "", fmt.Errorf("Error relabeling upper directory: %v", err)
++	}
++	if err = label.Relabel(workDir, mountLabel, false); err != nil {
++		return "", fmt.Errorf("Error relabeling work directory: %v", err)
++	}
++	if err = label.Relabel(mergedDir, mountLabel, false); err != nil {
++		return "", fmt.Errorf("Error relabeling merged directory: %v", err)
++	}
++
+ 	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
+ 
+ 	// if it's mounted already, just return
