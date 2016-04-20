@@ -9,7 +9,7 @@
 %global project docker
 %global repo %{project}
 %global common_path %{provider}.%{provider_tld}/%{project}
-%global d_version 1.10.2
+%global d_version 1.10.3
 
 %global import_path %{common_path}/%{repo}
 %global import_path_libcontainer %{common_path}/libcontainer
@@ -74,6 +74,7 @@ Source12: https://%{provider}.%{provider_tld}/fedora-cloud/%{name}-selinux/archi
 Source13: https://%{provider}.%{provider_tld}/projectatomic/%{name}-storage-setup/archive/%{dss_commit}/%{name}-storage-setup-%{dss_shortcommit}.tar.gz
 
 Patch999: 0999-kuberdock-docker-selinux.patch
+Patch999: 0999-allow_selinux_overlayfs.patch
 
 BuildRequires: glibc-static
 BuildRequires: golang == 1.4.2
