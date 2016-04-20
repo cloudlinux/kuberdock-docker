@@ -47,8 +47,7 @@ func (s *DockerSuite) TestBuildResourceConstraintsAreUsed(c *check.C) {
 		Ulimits    []*units.Ulimit
 	}
 
-	cfg, err := inspectFieldJSON(cID, "HostConfig")
-	c.Assert(err, checker.IsNil)
+	cfg := inspectFieldJSON(c, cID, "HostConfig")
 
 	var c1 hostConfig
 	err = json.Unmarshal([]byte(cfg), &c1)
@@ -66,8 +65,7 @@ func (s *DockerSuite) TestBuildResourceConstraintsAreUsed(c *check.C) {
 	// Make sure constraints aren't saved to image
 	dockerCmd(c, "run", "--name=test", name)
 
-	cfg, err = inspectFieldJSON("test", "HostConfig")
-	c.Assert(err, checker.IsNil)
+	cfg = inspectFieldJSON(c, "test", "HostConfig")
 
 	var c2 hostConfig
 	err = json.Unmarshal([]byte(cfg), &c2)
@@ -173,8 +171,8 @@ func (s *DockerSuite) TestBuildCancellationKillsSleep(c *check.C) {
 	}
 
 	testActions := map[string]chan bool{
-		"start": make(chan bool),
-		"die":   make(chan bool),
+		"start": make(chan bool, 1),
+		"die":   make(chan bool, 1),
 	}
 
 	matcher := matchEventLine(buildID, "container", testActions)

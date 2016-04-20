@@ -1,10 +1,12 @@
 package hcsshim
 
 import (
-	"fmt"
-	"syscall"
-	"unsafe"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"runtime"
 
+	"github.com/Microsoft/go-winio"
 	"github.com/Sirupsen/logrus"
 )
 
@@ -16,72 +18,152 @@ func ImportLayer(info DriverInfo, layerId string, importFolderPath string, paren
 	title := "hcsshim::ImportLayer "
 	logrus.Debugf(title+"flavour %d layerId %s folder %s", info.Flavour, layerId, importFolderPath)
 
-	// Load the DLL and get a handle to the procedure we need
-	dll, proc, err := loadAndFind(procImportLayer)
-	if dll != nil {
-		defer dll.Release()
-	}
-	if err != nil {
-		return err
-	}
-
 	// Generate layer descriptors
 	layers, err := layerPathsToDescriptors(parentLayerPaths)
 	if err != nil {
-		err = fmt.Errorf(title+"- Failed to generate layer descriptors ", err)
-		return err
-	}
-
-	// Convert layerId to uint16 pointer for calling the procedure
-	layerIdp, err := syscall.UTF16PtrFromString(layerId)
-	if err != nil {
-		err = fmt.Errorf(title+"- Failed conversion of layerId %s to pointer %s", layerId, err)
-		logrus.Error(err)
-		return err
-	}
-
-	// Convert importFolderPath to uint16 pointer for calling the procedure
-	importFolderPathp, err := syscall.UTF16PtrFromString(importFolderPath)
-	if err != nil {
-		err = fmt.Errorf(title+"- Failed conversion of importFolderPath %s to pointer %s", importFolderPath, err)
-		logrus.Error(err)
 		return err
 	}
 
 	// Convert info to API calling convention
 	infop, err := convertDriverInfo(info)
 	if err != nil {
-		err = fmt.Errorf(title+"- Failed conversion info struct %s", err)
 		logrus.Error(err)
 		return err
 	}
 
-	var layerDescriptorsp *WC_LAYER_DESCRIPTOR
-	if len(layers) > 0 {
-		layerDescriptorsp = &(layers[0])
-	} else {
-		layerDescriptorsp = nil
-	}
-
-	// Call the procedure itself.
-	r1, _, _ := proc.Call(
-		uintptr(unsafe.Pointer(&infop)),
-		uintptr(unsafe.Pointer(layerIdp)),
-		uintptr(unsafe.Pointer(importFolderPathp)),
-		uintptr(unsafe.Pointer(layerDescriptorsp)),
-		uintptr(len(layers)))
-	use(unsafe.Pointer(&infop))
-	use(unsafe.Pointer(layerIdp))
-	use(unsafe.Pointer(importFolderPathp))
-	use(unsafe.Pointer(layerDescriptorsp))
-
-	if r1 != 0 {
-		err = fmt.Errorf(title+"- Win32 API call returned error r1=%d err=%s layerId=%s flavour=%d folder=%s",
-			r1, syscall.Errno(r1), layerId, info.Flavour, importFolderPath)
+	err = importLayer(&infop, layerId, importFolderPath, layers)
+	if err != nil {
+		err = makeErrorf(err, title, "layerId=%s flavour=%d folder=%s", layerId, info.Flavour, importFolderPath)
 		logrus.Error(err)
 		return err
 	}
 
 	logrus.Debugf(title+"succeeded flavour=%d layerId=%s folder=%s", info.Flavour, layerId, importFolderPath)
 	return nil
+}
+
+type LayerWriter interface {
+	Add(name string, fileInfo *winio.FileBasicInfo) error
+	Remove(name string) error
+	Write(b []byte) (int, error)
+	Close() error
+}
+
+// FilterLayerWriter provides an interface to write the contents of a layer to the file system.
+type FilterLayerWriter struct {
+	context uintptr
+}
+
+// Add adds a file or directory to the layer. The file's parent directory must have already been added.
+//
+// name contains the file's relative path. fileInfo contains file times and file attributes; the rest
+// of the file metadata and the file data must be written as a Win32 backup stream to the Write() method.
+// winio.BackupStreamWriter can be used to facilitate this.
+func (w *FilterLayerWriter) Add(name string, fileInfo *winio.FileBasicInfo) error {
+	if name[0] != '\\' {
+		name = `\` + name
+	}
+	err := importLayerNext(w.context, name, fileInfo)
+	if err != nil {
+		return makeError(err, "ImportLayerNext", "")
+	}
+	return nil
+}
+
+// Remove removes a file from the layer. The file must have been present in the parent layer.
+//
+// name contains the file's relative path.
+func (w *FilterLayerWriter) Remove(name string) error {
+	if name[0] != '\\' {
+		name = `\` + name
+	}
+	err := importLayerNext(w.context, name, nil)
+	if err != nil {
+		return makeError(err, "ImportLayerNext", "")
+	}
+	return nil
+}
+
+// Write writes more backup stream data to the current file.
+func (w *FilterLayerWriter) Write(b []byte) (int, error) {
+	err := importLayerWrite(w.context, b)
+	if err != nil {
+		err = makeError(err, "ImportLayerWrite", "")
+		return 0, err
+	}
+	return len(b), err
+}
+
+// Close completes the layer write operation. The error must be checked to ensure that the
+// operation was successful.
+func (w *FilterLayerWriter) Close() (err error) {
+	if w.context != 0 {
+		err = importLayerEnd(w.context)
+		if err != nil {
+			err = makeError(err, "ImportLayerEnd", "")
+		}
+		w.context = 0
+	}
+	return
+}
+
+type legacyLayerWriterWrapper struct {
+	*LegacyLayerWriter
+	info             DriverInfo
+	layerId          string
+	path             string
+	parentLayerPaths []string
+}
+
+func (r *legacyLayerWriterWrapper) Close() error {
+	err := r.LegacyLayerWriter.Close()
+	if err == nil {
+		// Use the original path here because ImportLayer does not support long paths for the source in TP5.
+		// But do use a long path for the destination to work around another bug with directories
+		// with MAX_PATH - 12 < length < MAX_PATH.
+		info := r.info
+		fullPath, err := makeLongAbsPath(filepath.Join(info.HomeDir, r.layerId))
+		if err == nil {
+			info.HomeDir = ""
+			err = ImportLayer(info, fullPath, r.path, r.parentLayerPaths)
+		}
+	}
+	os.RemoveAll(r.root)
+	return err
+}
+
+// NewLayerWriter returns a new layer writer for creating a layer on disk.
+func NewLayerWriter(info DriverInfo, layerId string, parentLayerPaths []string) (LayerWriter, error) {
+	if procImportLayerBegin.Find() != nil {
+		// The new layer reader is not available on this Windows build. Fall back to the
+		// legacy export code path.
+		path, err := ioutil.TempDir("", "hcs")
+		if err != nil {
+			return nil, err
+		}
+		return &legacyLayerWriterWrapper{
+			LegacyLayerWriter: NewLegacyLayerWriter(path),
+			info:              info,
+			layerId:           layerId,
+			path:              path,
+			parentLayerPaths:  parentLayerPaths,
+		}, nil
+	}
+	layers, err := layerPathsToDescriptors(parentLayerPaths)
+	if err != nil {
+		return nil, err
+	}
+
+	infop, err := convertDriverInfo(info)
+	if err != nil {
+		return nil, err
+	}
+
+	w := &FilterLayerWriter{}
+	err = importLayerBegin(&infop, layerId, layers, &w.context)
+	if err != nil {
+		return nil, makeError(err, "ImportLayerStart", "")
+	}
+	runtime.SetFinalizer(w, func(w *FilterLayerWriter) { w.Close() })
+	return w, nil
 }

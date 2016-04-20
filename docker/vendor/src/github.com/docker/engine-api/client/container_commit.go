@@ -5,10 +5,11 @@ import (
 	"net/url"
 
 	"github.com/docker/engine-api/types"
+	"golang.org/x/net/context"
 )
 
 // ContainerCommit applies changes into a container and creates a new tagged image.
-func (cli *Client) ContainerCommit(options types.ContainerCommitOptions) (types.ContainerCommitResponse, error) {
+func (cli *Client) ContainerCommit(ctx context.Context, options types.ContainerCommitOptions) (types.ContainerCommitResponse, error) {
 	query := url.Values{}
 	query.Set("container", options.ContainerID)
 	query.Set("repo", options.RepositoryName)
@@ -23,15 +24,12 @@ func (cli *Client) ContainerCommit(options types.ContainerCommitOptions) (types.
 	}
 
 	var response types.ContainerCommitResponse
-	resp, err := cli.post("/commit", query, options.Config, nil)
+	resp, err := cli.post(ctx, "/commit", query, options.Config, nil)
 	if err != nil {
 		return response, err
 	}
-	defer ensureReaderClosed(resp)
 
-	if err := json.NewDecoder(resp.body).Decode(&response); err != nil {
-		return response, err
-	}
-
-	return response, nil
+	err = json.NewDecoder(resp.body).Decode(&response)
+	ensureReaderClosed(resp)
+	return response, err
 }

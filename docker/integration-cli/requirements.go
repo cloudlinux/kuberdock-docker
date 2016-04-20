@@ -29,6 +29,14 @@ var (
 		func() bool { return daemonPlatform == "linux" },
 		"Test requires a Linux daemon",
 	}
+	NotArm = testRequirement{
+		func() bool { return os.Getenv("DOCKER_ENGINE_GOARCH") != "arm" },
+		"Test requires a daemon not running on ARM",
+	}
+	NotPpc64le = testRequirement{
+		func() bool { return os.Getenv("DOCKER_ENGINE_GOARCH") != "ppc64le" },
+		"Test requires a daemon not running on ppc64le",
+	}
 	SameHostDaemon = testRequirement{
 		func() bool { return isLocalDaemon },
 		"Test requires docker daemon to run on the same machine as CLI",
@@ -84,21 +92,35 @@ var (
 			// for now notary binary is built only if we're running inside
 			// container through `make test`. Figure that out by testing if
 			// notary-server binary is in PATH.
-			_, err := exec.LookPath(notaryBinary)
+			_, err := exec.LookPath(notaryServerBinary)
 			return err == nil
 		},
-		fmt.Sprintf("Test requires an environment that can host %s in the same host", notaryBinary),
+		fmt.Sprintf("Test requires an environment that can host %s in the same host", notaryServerBinary),
+	}
+	NotaryServerHosting = testRequirement{
+		func() bool {
+			// for now notary-server binary is built only if we're running inside
+			// container through `make test`. Figure that out by testing if
+			// notary-server binary is in PATH.
+			_, err := exec.LookPath(notaryServerBinary)
+			return err == nil
+		},
+		fmt.Sprintf("Test requires an environment that can host %s in the same host", notaryServerBinary),
 	}
 	NotOverlay = testRequirement{
 		func() bool {
-			cmd := exec.Command("grep", "^overlay / overlay", "/proc/mounts")
-			if err := cmd.Run(); err != nil {
-				return true
-			}
-			return false
+			return !strings.HasPrefix(daemonStorageDriver, "overlay")
 		},
 		"Test requires underlying root filesystem not be backed by overlay.",
 	}
+
+	Devicemapper = testRequirement{
+		func() bool {
+			return strings.HasPrefix(daemonStorageDriver, "devicemapper")
+		},
+		"Test requires underlying root filesystem to be backed by devicemapper.",
+	}
+
 	IPv6 = testRequirement{
 		func() bool {
 			cmd := exec.Command("test", "-f", "/proc/net/if_inet6")
@@ -119,6 +141,30 @@ var (
 			return true
 		},
 		"Test requires native Golang compiler instead of GCCGO",
+	}
+	UserNamespaceInKernel = testRequirement{
+		func() bool {
+			if _, err := os.Stat("/proc/self/uid_map"); os.IsNotExist(err) {
+				/*
+				 * This kernel-provided file only exists if user namespaces are
+				 * supported
+				 */
+				return false
+			}
+
+			// We need extra check on redhat based distributions
+			if f, err := os.Open("/sys/module/user_namespace/parameters/enable"); err == nil {
+				b := make([]byte, 1)
+				_, _ = f.Read(b)
+				if string(b) == "N" {
+					return false
+				}
+				return true
+			}
+
+			return true
+		},
+		"Kernel must have user namespaces configured and enabled.",
 	}
 	NotUserNamespace = testRequirement{
 		func() bool {

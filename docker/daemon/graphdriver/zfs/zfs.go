@@ -323,6 +323,11 @@ func (d *Driver) Get(id, mountLabel string) (string, error) {
 // Put removes the existing mountpoint for the given id if it exists.
 func (d *Driver) Put(id string) error {
 	mountpoint := d.mountPath(id)
+	mounted, err := graphdriver.Mounted(graphdriver.FsMagicZfs, mountpoint)
+	if err != nil || !mounted {
+		return err
+	}
+
 	logrus.Debugf(`[zfs] unmount("%s")`, mountpoint)
 
 	if err := mount.Unmount(mountpoint); err != nil {
@@ -333,5 +338,7 @@ func (d *Driver) Put(id string) error {
 
 // Exists checks to see if the cache entry exists for the given id.
 func (d *Driver) Exists(id string) bool {
+	d.Lock()
+	defer d.Unlock()
 	return d.filesystemsCache[d.zfsPath(id)] == true
 }

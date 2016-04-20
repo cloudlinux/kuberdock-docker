@@ -59,6 +59,10 @@ type DownloadDescriptor interface {
 	DiffID() (layer.DiffID, error)
 	// Download is called to perform the download.
 	Download(ctx context.Context, progressOutput progress.Output) (io.ReadCloser, int64, error)
+	// Close is called when the download manager is finished with this
+	// descriptor and will not call Download again or read from the reader
+	// that Download returned.
+	Close()
 }
 
 // DownloadDescriptorWithRegistered is a DownloadDescriptor that has an
@@ -142,7 +146,11 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 	}
 
 	if topDownload == nil {
-		return rootFS, func() { layer.ReleaseAndLog(ldm.layerStore, topLayer) }, nil
+		return rootFS, func() {
+			if topLayer != nil {
+				layer.ReleaseAndLog(ldm.layerStore, topLayer)
+			}
+		}, nil
 	}
 
 	// Won't be using the list built up so far - will generate it
@@ -229,6 +237,8 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 				retries        int
 			)
 
+			defer descriptor.Close()
+
 			for {
 				downloadReader, size, err = descriptor.Download(d.Transfer.Context(), progressOutput)
 				if err == nil {
@@ -257,7 +267,7 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 
 			selectLoop:
 				for {
-					progress.Updatef(progressOutput, descriptor.ID(), "Retrying in %d seconds", delay)
+					progress.Updatef(progressOutput, descriptor.ID(), "Retrying in %d second%s", delay, (map[bool]string{true: "s"})[delay != 1])
 					select {
 					case <-ticker.C:
 						delay--

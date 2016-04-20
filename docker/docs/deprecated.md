@@ -14,6 +14,15 @@ weight=80
 
 The following list of features are deprecated in Engine.
 
+### `-e` and `--email` flags on `docker login`
+**Deprecated In Release: v1.11**
+
+**Target For Removal In Release: v1.13**
+
+The docker login command is removing the ability to automatically register for an account with the target registry if the given username doesn't exist. Due to this change, the email flag is no longer required, and will be deprecated.
+
+The flag `--security-opt` doesn't use the colon separator(`:`) anymore to divide keys and values, it uses the equal symbol(`=`) for consinstency with other similar flags, like `--storage-opt`.
+
 ### Ambiguous event fields in API
 **Deprecated In Release: v1.10**
 
@@ -123,17 +132,6 @@ The following double-dash options are deprecated and have no replacement:
     docker ps --since-id
     docker ps --before-id
     docker search --trusted
-
-### Auto-creating missing host paths for bind mounts
-**Deprecated in Release: v1.9**
-
-**Target for Removal in Release: 1.11**
-
-When creating a container with a bind-mounted volume-- `docker run -v /host/path:/container/path` --
-docker was automatically creating the `/host/path` if it didn't already exist.
-
-This auto-creation of the host path is deprecated and docker will error out if
-the path does not exist.
 
 ### Interacting with V1 registries
 

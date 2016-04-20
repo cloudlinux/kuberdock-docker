@@ -1,4 +1,5 @@
-FROM golang:1.5.1
+FROM golang:1.6.0
+MAINTAINER David Lawrence "david.lawrence@docker.com"
 
 RUN apt-get update && apt-get install -y \
     libltdl-dev \
@@ -7,13 +8,17 @@ RUN apt-get update && apt-get install -y \
 
 EXPOSE 4443
 
-ENV NOTARYPKG github.com/docker/notary
-ENV GOPATH /go/src/${NOTARYPKG}/Godeps/_workspace:$GOPATH
+# Install DB migration tool
+RUN go get github.com/mattes/migrate
 
+ENV NOTARYPKG github.com/docker/notary
+
+# Copy the local repo to the expected go path
 COPY . /go/src/github.com/docker/notary
 
 WORKDIR /go/src/${NOTARYPKG}
 
+# Install notary-server
 RUN go install \
     -tags pkcs11 \
     -ldflags "-w -X ${NOTARYPKG}/version.GitCommit=`git rev-parse --short HEAD` -X ${NOTARYPKG}/version.NotaryVersion=`cat NOTARY_VERSION`" \

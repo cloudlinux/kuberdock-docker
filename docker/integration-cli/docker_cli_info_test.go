@@ -22,7 +22,6 @@ func (s *DockerSuite) TestInfoEnsureSucceeds(c *check.C) {
 		" Paused:",
 		" Stopped:",
 		"Images:",
-		"Execution Driver:",
 		"OSType:",
 		"Architecture:",
 		"Logging Driver:",
@@ -145,4 +144,23 @@ func (s *DockerSuite) TestInfoDisplaysStoppedContainers(c *check.C) {
 	c.Assert(out, checker.Contains, fmt.Sprintf(" Running: %d\n", 0))
 	c.Assert(out, checker.Contains, fmt.Sprintf(" Paused: %d\n", 0))
 	c.Assert(out, checker.Contains, fmt.Sprintf(" Stopped: %d\n", 1))
+}
+
+func (s *DockerSuite) TestInfoDebug(c *check.C) {
+	testRequires(c, SameHostDaemon, DaemonIsLinux)
+
+	d := NewDaemon(c)
+	err := d.Start("--debug")
+	c.Assert(err, checker.IsNil)
+	defer d.Stop()
+
+	out, err := d.Cmd("--debug", "info")
+	c.Assert(err, checker.IsNil)
+	c.Assert(out, checker.Contains, "Debug mode (client): true\n")
+	c.Assert(out, checker.Contains, "Debug mode (server): true\n")
+	c.Assert(out, checker.Contains, "File Descriptors")
+	c.Assert(out, checker.Contains, "Goroutines")
+	c.Assert(out, checker.Contains, "System Time")
+	c.Assert(out, checker.Contains, "EventsListeners")
+	c.Assert(out, checker.Contains, "Docker Root Dir")
 }
