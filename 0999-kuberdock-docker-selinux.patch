@@ -9,6 +9,13 @@ index b885fde..348f197 100644
 +
 +gen_require(`
 +    type svirt_lxc_net_t;
++    type etc_runtime_t;
++    class file setattr;
++    class file read;
++    class dir create;
 +')
 +
 +allow svirt_lxc_net_t docker_var_lib_t:{ filesystem file dir fd lnk_file chr_file blk_file sock_file fifo_file } *;
++allow svirt_lxc_net_t etc_runtime_t:file setattr;
++allow svirt_lxc_net_t docker_var_lib_t:dir create;
++allow svirt_lxc_net_t docker_var_lib_t:file read;
