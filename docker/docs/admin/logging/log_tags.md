@@ -3,7 +3,7 @@
 aliases = ["/engine/reference/logging/log_tags/"]
 title = "Log tags for logging driver"
 description = "Describes how to format tags for."
-keywords = ["docker, logging, driver, syslog, Fluentd, gelf"]
+keywords = ["docker, logging, driver, syslog, Fluentd, gelf, journald"]
 [menu.main]
 parent = "smn_logging"
 weight = 1
@@ -45,6 +45,26 @@ original container name.
 For advanced usage, the generated tag's use [go
 templates](http://golang.org/pkg/text/template/) and the container's [logging
 context](https://github.com/docker/docker/blob/master/daemon/logger/context.go).
+
+As an example of what is possible with the syslog logger:
+
+```
+$ docker run -it --rm \
+    --log-driver syslog \
+    --log-opt tag="{{ (.ExtraAttributes nil).SOME_ENV_VAR }}" \
+    --log-opt env=SOME_ENV_VAR \
+    -e SOME_ENV_VAR=logtester.1234 \
+    flyinprogrammer/logtester
+```
+
+Results in logs like this:
+
+```
+Apr  1 15:22:17 ip-10-27-39-73 docker/logtester.1234[45499]: + exec app
+Apr  1 15:22:17 ip-10-27-39-73 docker/logtester.1234[45499]: 2016-04-01 15:22:17.075416751 +0000 UTC stderr msg: 1
+```
+
+
 
 >**Note**:The driver specific log options `syslog-tag`, `fluentd-tag` and
 >`gelf-tag` still work for backwards compatibility. However, going forward you

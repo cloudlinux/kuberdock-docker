@@ -1,5 +1,3 @@
-// +build daemon
-
 package main
 
 import (
@@ -8,42 +6,53 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/distribution/uuid"
+	"github.com/docker/docker/api"
 	apiserver "github.com/docker/docker/api/server"
+	"github.com/docker/docker/api/server/middleware"
+	"github.com/docker/docker/api/server/router"
+	"github.com/docker/docker/api/server/router/build"
+	"github.com/docker/docker/api/server/router/container"
+	"github.com/docker/docker/api/server/router/image"
+	"github.com/docker/docker/api/server/router/network"
+	systemrouter "github.com/docker/docker/api/server/router/system"
+	"github.com/docker/docker/api/server/router/volume"
+	"github.com/docker/docker/builder/dockerfile"
 	"github.com/docker/docker/cli"
+	cliflags "github.com/docker/docker/cli/flags"
 	"github.com/docker/docker/cliconfig"
 	"github.com/docker/docker/daemon"
 	"github.com/docker/docker/daemon/logger"
 	"github.com/docker/docker/dockerversion"
+	"github.com/docker/docker/libcontainerd"
 	"github.com/docker/docker/opts"
+	"github.com/docker/docker/pkg/authorization"
 	"github.com/docker/docker/pkg/jsonlog"
+	"github.com/docker/docker/pkg/listeners"
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/pidfile"
 	"github.com/docker/docker/pkg/signal"
 	"github.com/docker/docker/pkg/system"
 	"github.com/docker/docker/registry"
+	"github.com/docker/docker/runconfig"
 	"github.com/docker/docker/utils"
 	"github.com/docker/go-connections/tlsconfig"
 )
 
 const (
-	daemonUsage          = "       docker daemon [ --help | ... ]\n"
 	daemonConfigFileFlag = "-config-file"
-)
-
-var (
-	daemonCli cli.Handler = NewDaemonCli()
 )
 
 // DaemonCli represents the daemon CLI.
 type DaemonCli struct {
 	*daemon.Config
-	registryOptions *registry.Options
-	flags           *flag.FlagSet
+	commonFlags *cli.CommonFlags
+	configFile  *string
 }
 
 func presentInHelp(usage string) string { return usage }
@@ -51,31 +60,30 @@ func absentFromHelp(string) string      { return "" }
 
 // NewDaemonCli returns a pre-configured daemon CLI
 func NewDaemonCli() *DaemonCli {
-	daemonFlags := cli.Subcmd("daemon", nil, "Enable daemon mode", true)
-
 	// TODO(tiborvass): remove InstallFlags?
 	daemonConfig := new(daemon.Config)
 	daemonConfig.LogConfig.Config = make(map[string]string)
 	daemonConfig.ClusterOpts = make(map[string]string)
 
-	daemonConfig.InstallFlags(daemonFlags, presentInHelp)
-	daemonConfig.InstallFlags(flag.CommandLine, absentFromHelp)
-	registryOptions := new(registry.Options)
-	registryOptions.InstallFlags(daemonFlags, presentInHelp)
-	registryOptions.InstallFlags(flag.CommandLine, absentFromHelp)
-	daemonFlags.Require(flag.Exact, 0)
+	if runtime.GOOS != "linux" {
+		daemonConfig.V2Only = true
+	}
+
+	daemonConfig.InstallFlags(flag.CommandLine, presentInHelp)
+	configFile := flag.CommandLine.String([]string{daemonConfigFileFlag}, defaultDaemonConfigFile, "Daemon configuration file")
+	flag.CommandLine.Require(flag.Exact, 0)
 
 	return &DaemonCli{
-		Config:          daemonConfig,
-		registryOptions: registryOptions,
-		flags:           daemonFlags,
+		Config:      daemonConfig,
+		commonFlags: cliflags.InitCommonFlags(),
+		configFile:  configFile,
 	}
 }
 
 func migrateKey() (err error) {
 	// Migrate trust key if exists at ~/.docker/key.json and owned by current user
-	oldPath := filepath.Join(cliconfig.ConfigDir(), defaultTrustKeyFile)
-	newPath := filepath.Join(getDaemonConfDir(), defaultTrustKeyFile)
+	oldPath := filepath.Join(cliconfig.ConfigDir(), cliflags.DefaultTrustKeyFile)
+	newPath := filepath.Join(getDaemonConfDir(), cliflags.DefaultTrustKeyFile)
 	if _, statErr := os.Stat(newPath); os.IsNotExist(statErr) && currentUserIsOwner(oldPath) {
 		defer func() {
 			// Ensure old path is removed if no error occurred
@@ -113,47 +121,17 @@ func migrateKey() (err error) {
 	return nil
 }
 
-func getGlobalFlag() (globalFlag *flag.Flag) {
-	defer func() {
-		if x := recover(); x != nil {
-			switch f := x.(type) {
-			case *flag.Flag:
-				globalFlag = f
-			default:
-				panic(x)
-			}
-		}
-	}()
-	visitor := func(f *flag.Flag) { panic(f) }
-	commonFlags.FlagSet.Visit(visitor)
-	clientFlags.FlagSet.Visit(visitor)
-	return
-}
-
-// CmdDaemon is the daemon command, called the raw arguments after `docker daemon`.
-func (cli *DaemonCli) CmdDaemon(args ...string) error {
+func (cli *DaemonCli) start() {
 	// warn from uuid package when running the daemon
 	uuid.Loggerf = logrus.Warnf
 
-	if !commonFlags.FlagSet.IsEmpty() || !clientFlags.FlagSet.IsEmpty() {
-		// deny `docker -D daemon`
-		illegalFlag := getGlobalFlag()
-		fmt.Fprintf(os.Stderr, "invalid flag '-%s'.\nSee 'docker daemon --help'.\n", illegalFlag.Names[0])
-		os.Exit(1)
-	} else {
-		// allow new form `docker daemon -D`
-		flag.Merge(cli.flags, commonFlags.FlagSet)
+	flags := flag.CommandLine
+	cli.commonFlags.PostParse()
+
+	if cli.commonFlags.TrustKey == "" {
+		cli.commonFlags.TrustKey = filepath.Join(getDaemonConfDir(), cliflags.DefaultTrustKeyFile)
 	}
-
-	configFile := cli.flags.String([]string{daemonConfigFileFlag}, defaultDaemonConfigFile, "Daemon configuration file")
-
-	cli.flags.ParseFlags(args, true)
-	commonFlags.PostParse()
-
-	if commonFlags.TrustKey == "" {
-		commonFlags.TrustKey = filepath.Join(getDaemonConfDir(), defaultTrustKeyFile)
-	}
-	cliConfig, err := loadDaemonCliConfig(cli.Config, cli.flags, commonFlags, *configFile)
+	cliConfig, err := loadDaemonCliConfig(cli.Config, flags, cli.commonFlags, *cli.configFile)
 	if err != nil {
 		fmt.Fprint(os.Stderr, err)
 		os.Exit(1)
@@ -168,7 +146,10 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 		logrus.Warn("Running experimental build")
 	}
 
-	logrus.SetFormatter(&logrus.TextFormatter{TimestampFormat: jsonlog.RFC3339NanoFixed})
+	logrus.SetFormatter(&logrus.TextFormatter{
+		TimestampFormat: jsonlog.RFC3339NanoFixed,
+		DisableColors:   cli.Config.RawLogs,
+	})
 
 	if err := setDefaultUmask(); err != nil {
 		logrus.Fatalf("Failed to set umask: %v", err)
@@ -195,13 +176,13 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 	}
 
 	serverConfig := &apiserver.Config{
-		AuthorizationPluginNames: cli.Config.AuthorizationPlugins,
-		Logging:                  true,
-		Version:                  dockerversion.Version,
+		Logging:     true,
+		SocketGroup: cli.Config.SocketGroup,
+		Version:     dockerversion.Version,
+		EnableCors:  cli.Config.EnableCors,
+		CorsHeaders: cli.Config.CorsHeaders,
 	}
-	serverConfig = setPlatformServerConfig(serverConfig, cli.Config)
 
-	defaultHost := opts.DefaultHost
 	if cli.Config.TLS {
 		tlsOptions := tlsconfig.Options{
 			CAFile:   cli.Config.CommonTLSOptions.CAFile,
@@ -218,15 +199,17 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 			logrus.Fatal(err)
 		}
 		serverConfig.TLSConfig = tlsConfig
-		defaultHost = opts.DefaultTLSHost
 	}
 
 	if len(cli.Config.Hosts) == 0 {
 		cli.Config.Hosts = make([]string, 1)
 	}
+
+	api := apiserver.New(serverConfig)
+
 	for i := 0; i < len(cli.Config.Hosts); i++ {
 		var err error
-		if cli.Config.Hosts[i], err = opts.ParseHost(defaultHost, cli.Config.Hosts[i]); err != nil {
+		if cli.Config.Hosts[i], err = opts.ParseHost(cli.Config.TLS, cli.Config.Hosts[i]); err != nil {
 			logrus.Fatalf("error parsing -H %s : %v", cli.Config.Hosts[i], err)
 		}
 
@@ -235,21 +218,40 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 		if len(protoAddrParts) != 2 {
 			logrus.Fatalf("bad format %s, expected PROTO://ADDR", protoAddr)
 		}
-		serverConfig.Addrs = append(serverConfig.Addrs, apiserver.Addr{Proto: protoAddrParts[0], Addr: protoAddrParts[1]})
-	}
 
-	api, err := apiserver.New(serverConfig)
-	if err != nil {
-		logrus.Fatal(err)
+		proto := protoAddrParts[0]
+		addr := protoAddrParts[1]
+
+		// It's a bad idea to bind to TCP without tlsverify.
+		if proto == "tcp" && (serverConfig.TLSConfig == nil || serverConfig.TLSConfig.ClientAuth != tls.RequireAndVerifyClientCert) {
+			logrus.Warn("[!] DON'T BIND ON ANY IP ADDRESS WITHOUT setting -tlsverify IF YOU DON'T KNOW WHAT YOU'RE DOING [!]")
+		}
+		l, err := listeners.Init(proto, addr, serverConfig.SocketGroup, serverConfig.TLSConfig)
+		if err != nil {
+			logrus.Fatal(err)
+		}
+		// If we're binding to a TCP port, make sure that a container doesn't try to use it.
+		if proto == "tcp" {
+			if err := allocateDaemonPort(addr); err != nil {
+				logrus.Fatal(err)
+			}
+		}
+		logrus.Debugf("Listener created for HTTP on %s (%s)", protoAddrParts[0], protoAddrParts[1])
+		api.Accept(protoAddrParts[1], l...)
 	}
 
 	if err := migrateKey(); err != nil {
 		logrus.Fatal(err)
 	}
-	cli.TrustKeyPath = commonFlags.TrustKey
+	cli.TrustKeyPath = cli.commonFlags.TrustKey
 
-	registryService := registry.NewService(cli.registryOptions)
-	d, err := daemon.NewDaemon(cli.Config, registryService)
+	registryService := registry.NewService(cli.Config.ServiceOptions)
+	containerdRemote, err := libcontainerd.New(cli.getLibcontainerdRoot(), cli.getPlatformRemoteOptions()...)
+	if err != nil {
+		logrus.Fatal(err)
+	}
+
+	d, err := daemon.NewDaemon(cli.Config, registryService, containerdRemote)
 	if err != nil {
 		if pfile != nil {
 			if err := pfile.Remove(); err != nil {
@@ -264,21 +266,32 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 	logrus.WithFields(logrus.Fields{
 		"version":     dockerversion.Version,
 		"commit":      dockerversion.GitCommit,
-		"execdriver":  d.ExecutionDriver().Name(),
 		"graphdriver": d.GraphDriverName(),
 	}).Info("Docker daemon")
 
-	api.InitRouters(d)
+	cli.initMiddlewares(api, serverConfig)
+	initRouter(api, d)
 
 	reload := func(config *daemon.Config) {
 		if err := d.Reload(config); err != nil {
 			logrus.Errorf("Error reconfiguring the daemon: %v", err)
 			return
 		}
-		api.Reload(config)
+		if config.IsValueSet("debug") {
+			debugEnabled := utils.IsDebugEnabled()
+			switch {
+			case debugEnabled && !config.Debug: // disable debug
+				utils.DisableDebug()
+				api.DisableProfiler()
+			case config.Debug && !debugEnabled: // enable debug
+				utils.EnableDebug()
+				api.EnableProfiler()
+			}
+
+		}
 	}
 
-	setupConfigReloadTrap(*configFile, cli.flags, reload)
+	setupConfigReloadTrap(*cli.configFile, flags, reload)
 
 	// The serve API routine never exits unless an error occurs
 	// We need to start it as a goroutine and wait on it so
@@ -304,6 +317,7 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 	// Wait for serve API to complete
 	errAPI := <-serveAPIWait
 	shutdownDaemon(d, 15)
+	containerdRemote.Cleanup()
 	if errAPI != nil {
 		if pfile != nil {
 			if err := pfile.Remove(); err != nil {
@@ -312,7 +326,6 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 		}
 		logrus.Fatalf("Shutting down due to ServeAPI error: %v", errAPI)
 	}
-	return nil
 }
 
 // shutdownDaemon just wraps daemon.Shutdown() to handle a timeout in case
@@ -332,7 +345,7 @@ func shutdownDaemon(d *daemon.Daemon, timeout time.Duration) {
 	}
 }
 
-func loadDaemonCliConfig(config *daemon.Config, daemonFlags *flag.FlagSet, commonConfig *cli.CommonFlags, configFile string) (*daemon.Config, error) {
+func loadDaemonCliConfig(config *daemon.Config, flags *flag.FlagSet, commonConfig *cli.CommonFlags, configFile string) (*daemon.Config, error) {
 	config.Debug = commonConfig.Debug
 	config.Hosts = commonConfig.Hosts
 	config.LogLevel = commonConfig.LogLevel
@@ -347,9 +360,9 @@ func loadDaemonCliConfig(config *daemon.Config, daemonFlags *flag.FlagSet, commo
 	}
 
 	if configFile != "" {
-		c, err := daemon.MergeDaemonConfigurations(config, daemonFlags, configFile)
+		c, err := daemon.MergeDaemonConfigurations(config, flags, configFile)
 		if err != nil {
-			if daemonFlags.IsSet(daemonConfigFileFlag) || !os.IsNotExist(err) {
+			if flags.IsSet(daemonConfigFileFlag) || !os.IsNotExist(err) {
 				return nil, fmt.Errorf("unable to configure the Docker daemon with file %s: %v\n", configFile, err)
 			}
 		}
@@ -362,12 +375,50 @@ func loadDaemonCliConfig(config *daemon.Config, daemonFlags *flag.FlagSet, commo
 
 	// Regardless of whether the user sets it to true or false, if they
 	// specify TLSVerify at all then we need to turn on TLS
-	if config.IsValueSet(tlsVerifyKey) {
+	if config.IsValueSet(cliflags.TLSVerifyKey) {
 		config.TLS = true
 	}
 
 	// ensure that the log level is the one set after merging configurations
-	setDaemonLogLevel(config.LogLevel)
+	cliflags.SetDaemonLogLevel(config.LogLevel)
 
 	return config, nil
+}
+
+func initRouter(s *apiserver.Server, d *daemon.Daemon) {
+	decoder := runconfig.ContainerDecoder{}
+
+	routers := []router.Router{
+		container.NewRouter(d, decoder),
+		image.NewRouter(d, decoder),
+		systemrouter.NewRouter(d),
+		volume.NewRouter(d),
+		build.NewRouter(dockerfile.NewBuildManager(d)),
+	}
+	if d.NetworkControllerEnabled() {
+		routers = append(routers, network.NewRouter(d))
+	}
+
+	s.InitRouter(utils.IsDebugEnabled(), routers...)
+}
+
+func (cli *DaemonCli) initMiddlewares(s *apiserver.Server, cfg *apiserver.Config) {
+	v := cfg.Version
+
+	vm := middleware.NewVersionMiddleware(v, api.DefaultVersion, api.MinVersion)
+	s.UseMiddleware(vm)
+
+	if cfg.EnableCors {
+		c := middleware.NewCORSMiddleware(cfg.CorsHeaders)
+		s.UseMiddleware(c)
+	}
+
+	u := middleware.NewUserAgentMiddleware(v)
+	s.UseMiddleware(u)
+
+	if len(cli.Config.AuthorizationPlugins) > 0 {
+		authZPlugins := authorization.NewPlugins(cli.Config.AuthorizationPlugins)
+		handleAuthorization := authorization.NewMiddleware(authZPlugins)
+		s.UseMiddleware(handleAuthorization)
+	}
 }

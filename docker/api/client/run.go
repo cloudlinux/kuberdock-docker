@@ -3,19 +3,26 @@ package client
 import (
 	"fmt"
 	"io"
+	"net/http/httputil"
 	"os"
 	"runtime"
 	"strings"
 
+	"golang.org/x/net/context"
+
 	"github.com/Sirupsen/logrus"
 	Cli "github.com/docker/docker/cli"
-	derr "github.com/docker/docker/errors"
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/promise"
 	"github.com/docker/docker/pkg/signal"
 	runconfigopts "github.com/docker/docker/runconfig/opts"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/libnetwork/resolvconf/dns"
+)
+
+const (
+	errCmdNotFound          = "not found or does not exist"
+	errCmdCouldNotBeInvoked = "could not be invoked"
 )
 
 func (cid *cidFile) Close() error {
@@ -42,22 +49,16 @@ func (cid *cidFile) Write(id string) error {
 // if container start fails with 'command cannot be invoked' error, return 126
 // return 125 for generic docker daemon failures
 func runStartContainerErr(err error) error {
-	trimmedErr := strings.Trim(err.Error(), "Error response from daemon: ")
-	statusError := Cli.StatusError{}
-	derrCmdNotFound := derr.ErrorCodeCmdNotFound.Message()
-	derrCouldNotInvoke := derr.ErrorCodeCmdCouldNotBeInvoked.Message()
-	derrNoSuchImage := derr.ErrorCodeNoSuchImageHash.Message()
-	derrNoSuchImageTag := derr.ErrorCodeNoSuchImageTag.Message()
-	switch trimmedErr {
-	case derrCmdNotFound:
-		statusError = Cli.StatusError{StatusCode: 127}
-	case derrCouldNotInvoke:
-		statusError = Cli.StatusError{StatusCode: 126}
-	case derrNoSuchImage, derrNoSuchImageTag:
-		statusError = Cli.StatusError{StatusCode: 125}
-	default:
-		statusError = Cli.StatusError{StatusCode: 125}
+	trimmedErr := strings.TrimPrefix(err.Error(), "Error response from daemon: ")
+	statusError := Cli.StatusError{StatusCode: 125}
+	if strings.HasPrefix(trimmedErr, "Container command") {
+		if strings.Contains(trimmedErr, errCmdNotFound) {
+			statusError = Cli.StatusError{StatusCode: 127}
+		} else if strings.Contains(trimmedErr, errCmdCouldNotBeInvoked) {
+			statusError = Cli.StatusError{StatusCode: 126}
+		}
 	}
+
 	return statusError
 }
 
@@ -158,6 +159,8 @@ func (cli *DockerCli) CmdRun(args ...string) error {
 	var (
 		waitDisplayID chan struct{}
 		errCh         chan error
+		cancelFun     context.CancelFunc
+		ctx           context.Context
 	)
 	if !config.AttachStdout && !config.AttachStderr {
 		// Make this asynchronous to allow the client to write to stdin before having to read the ID
@@ -170,8 +173,8 @@ func (cli *DockerCli) CmdRun(args ...string) error {
 	if *flAutoRemove && (hostConfig.RestartPolicy.IsAlways() || hostConfig.RestartPolicy.IsOnFailure()) {
 		return ErrConflictRestartPolicyAndAutoRemove
 	}
-
-	if config.AttachStdin || config.AttachStdout || config.AttachStderr {
+	attach := config.AttachStdin || config.AttachStdout || config.AttachStderr
+	if attach {
 		var (
 			out, stderr io.Writer
 			in          io.ReadCloser
@@ -195,43 +198,48 @@ func (cli *DockerCli) CmdRun(args ...string) error {
 		}
 
 		options := types.ContainerAttachOptions{
-			ContainerID: createResponse.ID,
-			Stream:      true,
-			Stdin:       config.AttachStdin,
-			Stdout:      config.AttachStdout,
-			Stderr:      config.AttachStderr,
-			DetachKeys:  cli.configFile.DetachKeys,
+			Stream:     true,
+			Stdin:      config.AttachStdin,
+			Stdout:     config.AttachStdout,
+			Stderr:     config.AttachStderr,
+			DetachKeys: cli.configFile.DetachKeys,
 		}
 
-		resp, err := cli.client.ContainerAttach(options)
-		if err != nil {
-			return err
+		resp, errAttach := cli.client.ContainerAttach(context.Background(), createResponse.ID, options)
+		if errAttach != nil && errAttach != httputil.ErrPersistEOF {
+			// ContainerAttach returns an ErrPersistEOF (connection closed)
+			// means server met an error and put it in Hijacked connection
+			// keep the error and read detailed error message from hijacked connection later
+			return errAttach
 		}
-		if in != nil && config.Tty {
-			if err := cli.setRawTerminal(); err != nil {
-				return err
-			}
-			defer cli.restoreTerminal(in)
-		}
+		ctx, cancelFun = context.WithCancel(context.Background())
 		errCh = promise.Go(func() error {
-			return cli.holdHijackedConnection(config.Tty, in, out, stderr, resp)
+			errHijack := cli.holdHijackedConnection(ctx, config.Tty, in, out, stderr, resp)
+			if errHijack == nil {
+				return errAttach
+			}
+			return errHijack
 		})
 	}
 
-	defer func() {
-		if *flAutoRemove {
-			options := types.ContainerRemoveOptions{
-				ContainerID:   createResponse.ID,
-				RemoveVolumes: true,
+	if *flAutoRemove {
+		defer func() {
+			if err := cli.removeContainer(createResponse.ID, true, false, true); err != nil {
+				fmt.Fprintf(cli.err, "%v\n", err)
 			}
-			if err := cli.client.ContainerRemove(options); err != nil {
-				fmt.Fprintf(cli.err, "Error deleting container: %s\n", err)
-			}
-		}
-	}()
+		}()
+	}
 
 	//start the container
-	if err := cli.client.ContainerStart(createResponse.ID); err != nil {
+	if err := cli.client.ContainerStart(context.Background(), createResponse.ID); err != nil {
+		// If we have holdHijackedConnection, we should notify
+		// holdHijackedConnection we are going to exit and wait
+		// to avoid the terminal are not restored.
+		if attach {
+			cancelFun()
+			<-errCh
+		}
+
 		cmd.ReportError(err.Error(), false)
 		return runStartContainerErr(err)
 	}
@@ -262,7 +270,7 @@ func (cli *DockerCli) CmdRun(args ...string) error {
 	if *flAutoRemove {
 		// Autoremove: wait for the container to finish, retrieve
 		// the exit code and remove the container
-		if status, err = cli.client.ContainerWait(createResponse.ID); err != nil {
+		if status, err = cli.client.ContainerWait(context.Background(), createResponse.ID); err != nil {
 			return runStartContainerErr(err)
 		}
 		if _, status, err = getExitCode(cli, createResponse.ID); err != nil {
@@ -272,7 +280,7 @@ func (cli *DockerCli) CmdRun(args ...string) error {
 		// No Autoremove: Simply retrieve the exit code
 		if !config.Tty {
 			// In non-TTY mode, we can't detach, so we must wait for container exit
-			if status, err = cli.client.ContainerWait(createResponse.ID); err != nil {
+			if status, err = cli.client.ContainerWait(context.Background(), createResponse.ID); err != nil {
 				return err
 			}
 		} else {

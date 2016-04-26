@@ -26,6 +26,7 @@ parent = "smn_cli"
       --force-rm                      Always remove intermediate containers
       --help                          Print usage
       --isolation=""                  Container isolation technology
+      --label=[]                      Set metadata for an image
       -m, --memory=""                 Memory limit for all build containers
       --memory-swap=""                A positive integer equal to memory plus swap. Specify -1 to enable unlimited swap.
       --no-cache                      Do not use cache when building the image
@@ -176,7 +177,7 @@ you must use `--rm=false`. This does not affect the build cache.
 This will clone the GitHub repository and use the cloned repository as context.
 The Dockerfile at the root of the repository is used as Dockerfile. Note that
 you can specify an arbitrary Git repository by using the `git://` or `git@`
-schema.
+scheme.
 
 ### Build with -
 
@@ -277,7 +278,7 @@ flag](../run.md#specifying-custom-cgroups).
 
 Using the `--ulimit` option with `docker build` will cause each build step's
 container to be started using those [`--ulimit`
-flag values](../run.md#setting-ulimits-in-a-container).
+flag values](./run.md#set-ulimits-in-container-ulimit).
 
 ### Set build-time variables (--build-arg)
 

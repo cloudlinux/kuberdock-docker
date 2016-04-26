@@ -49,8 +49,7 @@ func (s *DockerSuite) TestCommitPausedContainer(c *check.C) {
 
 	out, _ = dockerCmd(c, "commit", cleanedContainerID)
 
-	out, err := inspectField(cleanedContainerID, "State.Paused")
-	c.Assert(err, checker.IsNil, check.Commentf("%s", out))
+	out = inspectField(c, cleanedContainerID, "State.Paused")
 	// commit should not unpause a paused container
 	c.Assert(out, checker.Contains, "true")
 }
@@ -130,17 +129,16 @@ func (s *DockerSuite) TestCommitChange(c *check.C) {
 		"Config.ExposedPorts": "map[8080/tcp:{}]",
 		"Config.Env":          "[DEBUG=true test=1 PATH=/foo]",
 		"Config.Labels":       "map[foo:bar]",
-		"Config.Cmd":          "{[/bin/sh]}",
+		"Config.Cmd":          "[/bin/sh]",
 		"Config.WorkingDir":   "/opt",
-		"Config.Entrypoint":   "{[/bin/sh]}",
+		"Config.Entrypoint":   "[/bin/sh]",
 		"Config.User":         "testuser",
 		"Config.Volumes":      "map[/var/lib/docker:{}]",
 		"Config.OnBuild":      "[/usr/local/bin/python-build --dir /app/src]",
 	}
 
 	for conf, value := range expected {
-		res, err := inspectField(imageID, conf)
-		c.Assert(err, checker.IsNil, check.Commentf("%s('%s')", conf, res))
+		res := inspectField(c, imageID, conf)
 		if res != value {
 			c.Errorf("%s('%s'), expected %s", conf, res, value)
 		}
@@ -165,12 +163,10 @@ func (s *DockerSuite) TestCommitMergeConfigRun(c *check.C) {
 		Cmd []string
 	}
 	config1 := cfg{}
-	err := inspectFieldAndMarshall(id, "Config", &config1)
-	c.Assert(err, checker.IsNil)
+	inspectFieldAndMarshall(c, id, "Config", &config1)
 
 	config2 := cfg{}
-	err = inspectFieldAndMarshall(name, "Config", &config2)
-	c.Assert(err, checker.IsNil)
+	inspectFieldAndMarshall(c, name, "Config", &config2)
 
 	// Env has at least PATH loaded as well here, so let's just grab the FOO one
 	var env1, env2 string

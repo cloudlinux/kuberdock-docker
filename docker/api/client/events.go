@@ -4,9 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"golang.org/x/net/context"
+
+	"github.com/Sirupsen/logrus"
 	Cli "github.com/docker/docker/cli"
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/jsonlog"
@@ -47,7 +52,7 @@ func (cli *DockerCli) CmdEvents(args ...string) error {
 		Filters: eventFilterArgs,
 	}
 
-	responseBody, err := cli.client.Events(options)
+	responseBody, err := cli.client.Events(context.Background(), options)
 	if err != nil {
 		return err
 	}
@@ -99,10 +104,43 @@ func printOutput(event eventtypes.Message, output io.Writer) {
 
 	if len(event.Actor.Attributes) > 0 {
 		var attrs []string
-		for k, v := range event.Actor.Attributes {
+		var keys []string
+		for k := range event.Actor.Attributes {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			v := event.Actor.Attributes[k]
 			attrs = append(attrs, fmt.Sprintf("%s=%s", k, v))
 		}
 		fmt.Fprintf(output, " (%s)", strings.Join(attrs, ", "))
 	}
 	fmt.Fprint(output, "\n")
+}
+
+type eventHandler struct {
+	handlers map[string]func(eventtypes.Message)
+	mu       sync.Mutex
+}
+
+func (w *eventHandler) Handle(action string, h func(eventtypes.Message)) {
+	w.mu.Lock()
+	w.handlers[action] = h
+	w.mu.Unlock()
+}
+
+// Watch ranges over the passed in event chan and processes the events based on the
+// handlers created for a given action.
+// To stop watching, close the event chan.
+func (w *eventHandler) Watch(c <-chan eventtypes.Message) {
+	for e := range c {
+		w.mu.Lock()
+		h, exists := w.handlers[e.Action]
+		w.mu.Unlock()
+		if !exists {
+			continue
+		}
+		logrus.Debugf("event handler: received event: %v", e)
+		go h(e)
+	}
 }

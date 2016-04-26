@@ -2,13 +2,13 @@ package signed
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/go/canonical/json"
 	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/keys"
 )
 
 // Various basic signing errors
@@ -29,7 +29,7 @@ func VerifyRoot(s *data.Signed, minVersion int, keys map[string]data.PublicKey) 
 	}
 
 	var decoded map[string]interface{}
-	if err := json.Unmarshal(s.Signed, &decoded); err != nil {
+	if err := json.Unmarshal(*s.Signed, &decoded); err != nil {
 		return err
 	}
 	msg, err := json.MarshalCanonical(decoded)
@@ -57,23 +57,23 @@ func VerifyRoot(s *data.Signed, minVersion int, keys map[string]data.PublicKey) 
 			continue
 		}
 		// threshold of 1 so return on first success
-		return verifyMeta(s, "root", minVersion)
+		return verifyMeta(s, data.CanonicalRootRole, minVersion)
 	}
 	return ErrRoleThreshold{}
 }
 
 // Verify checks the signatures and metadata (expiry, version) for the signed role
 // data
-func Verify(s *data.Signed, role string, minVersion int, db *keys.KeyDB) error {
-	if err := verifyMeta(s, role, minVersion); err != nil {
+func Verify(s *data.Signed, role data.BaseRole, minVersion int) error {
+	if err := verifyMeta(s, role.Name, minVersion); err != nil {
 		return err
 	}
-	return VerifySignatures(s, role, db)
+	return VerifySignatures(s, role)
 }
 
 func verifyMeta(s *data.Signed, role string, minVersion int) error {
 	sm := &data.SignedCommon{}
-	if err := json.Unmarshal(s.Signed, sm); err != nil {
+	if err := json.Unmarshal(*s.Signed, sm); err != nil {
 		return err
 	}
 	if !data.ValidTUFType(sm.Type, role) {
@@ -96,23 +96,20 @@ func IsExpired(t time.Time) bool {
 }
 
 // VerifySignatures checks the we have sufficient valid signatures for the given role
-func VerifySignatures(s *data.Signed, role string, db *keys.KeyDB) error {
+func VerifySignatures(s *data.Signed, roleData data.BaseRole) error {
 	if len(s.Signatures) == 0 {
 		return ErrNoSignatures
-	}
-
-	roleData := db.GetRole(role)
-	if roleData == nil {
-		return ErrUnknownRole
 	}
 
 	if roleData.Threshold < 1 {
 		return ErrRoleThreshold{}
 	}
-	logrus.Debugf("%s role has key IDs: %s", role, strings.Join(roleData.KeyIDs, ","))
+	logrus.Debugf("%s role has key IDs: %s", roleData.Name, strings.Join(roleData.ListKeyIDs(), ","))
 
+	// remarshal the signed part so we can verify the signature, since the signature has
+	// to be of a canonically marshalled signed object
 	var decoded map[string]interface{}
-	if err := json.Unmarshal(s.Signed, &decoded); err != nil {
+	if err := json.Unmarshal(*s.Signed, &decoded); err != nil {
 		return err
 	}
 	msg, err := json.MarshalCanonical(decoded)
@@ -123,25 +120,13 @@ func VerifySignatures(s *data.Signed, role string, db *keys.KeyDB) error {
 	valid := make(map[string]struct{})
 	for _, sig := range s.Signatures {
 		logrus.Debug("verifying signature for key ID: ", sig.KeyID)
-		if !roleData.ValidKey(sig.KeyID) {
-			logrus.Debugf("continuing b/c keyid was invalid: %s for roledata %s\n", sig.KeyID, roleData)
-			continue
-		}
-		key := db.GetKey(sig.KeyID)
-		if key == nil {
+		key, ok := roleData.Keys[sig.KeyID]
+		if !ok {
 			logrus.Debugf("continuing b/c keyid lookup was nil: %s\n", sig.KeyID)
 			continue
 		}
-		// method lookup is consistent due to Unmarshal JSON doing lower case for us.
-		method := sig.Method
-		verifier, ok := Verifiers[method]
-		if !ok {
-			logrus.Debugf("continuing b/c signing method is not supported: %s\n", sig.Method)
-			continue
-		}
-
-		if err := verifier.Verify(key, sig.Signature, msg); err != nil {
-			logrus.Debugf("continuing b/c signature was invalid\n")
+		if err := VerifySignature(msg, sig, key); err != nil {
+			logrus.Debugf("continuing b/c %s", err.Error())
 			continue
 		}
 		valid[sig.KeyID] = struct{}{}
@@ -154,27 +139,17 @@ func VerifySignatures(s *data.Signed, role string, db *keys.KeyDB) error {
 	return nil
 }
 
-// Unmarshal unmarshals and verifys the raw bytes for a given role's metadata
-func Unmarshal(b []byte, v interface{}, role string, minVersion int, db *keys.KeyDB) error {
-	s := &data.Signed{}
-	if err := json.Unmarshal(b, s); err != nil {
-		return err
+// VerifySignature checks a single signature and public key against a payload
+func VerifySignature(msg []byte, sig data.Signature, pk data.PublicKey) error {
+	// method lookup is consistent due to Unmarshal JSON doing lower case for us.
+	method := sig.Method
+	verifier, ok := Verifiers[method]
+	if !ok {
+		return fmt.Errorf("signing method is not supported: %s\n", sig.Method)
 	}
-	if err := Verify(s, role, minVersion, db); err != nil {
-		return err
-	}
-	return json.Unmarshal(s.Signed, v)
-}
 
-// UnmarshalTrusted unmarshals and verifies signatures only, not metadata, for a
-// given role's metadata
-func UnmarshalTrusted(b []byte, v interface{}, role string, db *keys.KeyDB) error {
-	s := &data.Signed{}
-	if err := json.Unmarshal(b, s); err != nil {
-		return err
+	if err := verifier.Verify(pk, sig.Signature, msg); err != nil {
+		return fmt.Errorf("signature was invalid\n")
 	}
-	if err := VerifySignatures(s, role, db); err != nil {
-		return err
-	}
-	return json.Unmarshal(s.Signed, v)
+	return nil
 }

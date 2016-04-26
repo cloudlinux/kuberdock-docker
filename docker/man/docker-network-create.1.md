@@ -14,6 +14,8 @@ docker-network-create - create a new network
 [**--ip-range**=*[]*]
 [**--ipam-driver**=*default*]
 [**--ipam-opt**=*map[]*]
+[**--ipv6**]
+[**--label**[=*[]*]]
 [**-o**|**--opt**=*map[]*]
 [**--subnet**=*[]*]
 NETWORK-NAME
@@ -52,7 +54,7 @@ The `docker daemon` options that support the `overlay` network are:
 
 To read more about these options and how to configure them, see ["*Get started
 with multi-host
-network*"](https://www.docker.com/engine/userguide/networking/get-started-overlay.md).
+network*"](https://docs.docker.com/engine/userguide/networking/get-started-overlay/).
 
 It is also a good idea, though not required, that you install Docker Swarm on to
 manage the cluster that makes up your network. Swarm provides sophisticated
@@ -95,7 +97,7 @@ disconnect` command.
 When you create a network, Engine creates a non-overlapping subnetwork for the
 network by default. This subnetwork is not a subdivision of an existing network.
 It is purely for ip-addressing purposes. You can override this default and
-specify subnetwork values directly using the the `--subnet` option. On a
+specify subnetwork values directly using the `--subnet` option. On a
 `bridge` network you can only create a single subnet:
 
 ```bash
@@ -151,6 +153,12 @@ If you want to create an externally isolated `overlay` network, you can specify 
 
 **--ipam-opt**=map[]
   Set custom IPAM driver options
+
+**--ipv6**
+  Enable IPv6 networking
+
+**--label**=*label*
+   Set metadata for a network
 
 **-o**, **--opt**=map[]
   Set custom driver options

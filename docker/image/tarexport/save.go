@@ -14,6 +14,7 @@ import (
 	"github.com/docker/docker/image/v1"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/archive"
+	"github.com/docker/docker/pkg/system"
 	"github.com/docker/docker/reference"
 )
 
@@ -69,9 +70,17 @@ func (l *tarexporter) parseNames(names []string) (map[image.ID]*imageDescriptor,
 	}
 
 	for _, name := range names {
-		ref, err := reference.ParseNamed(name)
+		id, ref, err := reference.ParseIDOrReference(name)
 		if err != nil {
 			return nil, err
+		}
+		if id != "" {
+			_, err := l.is.Get(image.ID(id))
+			if err != nil {
+				return nil, err
+			}
+			addAssoc(image.ID(id), nil)
+			continue
 		}
 		if ref.Name() == string(digest.Canonical) {
 			imgID, err := l.is.Search(name)
@@ -119,6 +128,7 @@ func (s *saveSession) save(outStream io.Writer) error {
 	reposLegacy := make(map[string]map[string]string)
 
 	var manifest []manifestItem
+	var parentLinks []parentLink
 
 	for id, imageDescr := range s.images {
 		if err = s.saveImage(id); err != nil {
@@ -145,6 +155,15 @@ func (s *saveSession) save(outStream io.Writer) error {
 			RepoTags: repoTags,
 			Layers:   layers,
 		})
+
+		parentID, _ := s.is.GetParent(id)
+		parentLinks = append(parentLinks, parentLink{id, parentID})
+	}
+
+	for i, p := range validatedParentLinks(parentLinks) {
+		if p.parentID != "" {
+			manifest[i].Parent = p.parentID
+		}
 	}
 
 	if len(reposLegacy) > 0 {
@@ -160,7 +179,7 @@ func (s *saveSession) save(outStream io.Writer) error {
 		if err := f.Close(); err != nil {
 			return err
 		}
-		if err := os.Chtimes(reposFile, time.Unix(0, 0), time.Unix(0, 0)); err != nil {
+		if err := system.Chtimes(reposFile, time.Unix(0, 0), time.Unix(0, 0)); err != nil {
 			return err
 		}
 	}
@@ -177,7 +196,7 @@ func (s *saveSession) save(outStream io.Writer) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Chtimes(manifestFileName, time.Unix(0, 0), time.Unix(0, 0)); err != nil {
+	if err := system.Chtimes(manifestFileName, time.Unix(0, 0), time.Unix(0, 0)); err != nil {
 		return err
 	}
 
@@ -233,7 +252,7 @@ func (s *saveSession) saveImage(id image.ID) error {
 	if err := ioutil.WriteFile(configFile, img.RawJSON(), 0644); err != nil {
 		return err
 	}
-	if err := os.Chtimes(configFile, img.Created, img.Created); err != nil {
+	if err := system.Chtimes(configFile, img.Created, img.Created); err != nil {
 		return err
 	}
 
@@ -290,7 +309,7 @@ func (s *saveSession) saveLayer(id layer.ChainID, legacyImg image.V1Image, creat
 
 	for _, fname := range []string{"", legacyVersionFileName, legacyConfigFileName, legacyLayerFileName} {
 		// todo: maybe save layer created timestamp?
-		if err := os.Chtimes(filepath.Join(outDir, fname), createdTime, createdTime); err != nil {
+		if err := system.Chtimes(filepath.Join(outDir, fname), createdTime, createdTime); err != nil {
 			return err
 		}
 	}

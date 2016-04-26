@@ -73,8 +73,6 @@ Source12: https://%{provider}.%{provider_tld}/fedora-cloud/%{name}-selinux/archi
 # Source13 is the source tarball for %%{name}-storage-setup
 Source13: https://%{provider}.%{provider_tld}/projectatomic/%{name}-storage-setup/archive/%{dss_commit}/%{name}-storage-setup-%{dss_shortcommit}.tar.gz
 
-Patch999: 0999-kuberdock-docker-selinux.patch
-
 BuildRequires: glibc-static
 BuildRequires: golang == 1.4.2
 BuildRequires: device-mapper-devel
@@ -152,10 +150,6 @@ cp %{SOURCE6} .
 
 # unpack %%{name}-selinux
 tar zxf %{SOURCE12}
-# apply KuberDock patches
-pushd %{name}-selinux-%{ds_commit}
-%patch999 -p1
-popd
 
 # untar %%{name}-utils tarball
 tar zxf %{SOURCE11}
@@ -888,7 +882,7 @@ subpackages
 - Readded --(add|block)-registry flags.
 
 * Fri Feb 13 2015 Lokesh Mandvekar <lsm5@redhat.com> - 1.5.0-2
-- Resolves: rhbz#1192312 - custom release numbers for 
+- Resolves: rhbz#1192312 - custom release numbers for
 python-websocket-client and docker-py
 - Resolves: rhbz#1192171 - changed options and env vars for
 adding/replacing registries
@@ -1072,7 +1066,7 @@ job
 - Remove docker-rhel entitlment patch. This was buggy and is no longer needed
 
 * Mon Oct 20 2014 Dan Walsh <dwalsh@redhat.com> - 1.2.0-1.7
-- Add 404 patch to allow docker to continue to try to download updates with 
+- Add 404 patch to allow docker to continue to try to download updates with
 - different certs, even if the registry returns 404 error
 
 * Tue Oct 7 2014 Eric Paris <eparis@redhat.com> - 1.2.0-1.6
@@ -1128,7 +1122,7 @@ job
 
 * Fri Jul 25 2014 Dan Walsh <dwalsh@redhat.com> - 1.1.2-2
 - Update to the latest from upstream
-- Add comment and envoroment patches to allow setting of comments and 
+- Add comment and envoroment patches to allow setting of comments and
 - enviroment variables from docker import
 
 * Wed Jul 23 2014 Dan Walsh <dwalsh@redhat.com> - 1.1.1-3
@@ -1593,7 +1587,7 @@ remount /var/lib/docker as --private
 * Tue Sep 10 2013 Lokesh Mandvekar <lsm5@redhat.com> 0.6.1-2
 - buildrequires updated
 - package renamed to docker-io
- 
+
 * Fri Aug 30 2013 Lokesh Mandvekar <lsm5@redhat.com> 0.6.1-1
 - Version bump
 - Package name change from lxc-docker to docker

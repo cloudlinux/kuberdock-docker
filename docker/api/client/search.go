@@ -7,6 +7,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"golang.org/x/net/context"
+
 	Cli "github.com/docker/docker/cli"
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/stringutils"
@@ -36,7 +38,7 @@ func (cli *DockerCli) CmdSearch(args ...string) error {
 		return err
 	}
 
-	authConfig := cli.resolveAuthConfig(cli.configFile.AuthConfigs, indexInfo)
+	authConfig := cli.resolveAuthConfig(indexInfo)
 	requestPrivilege := cli.registryAuthenticationPrivilegedFunc(indexInfo, "search")
 
 	encodedAuth, err := encodeAuthToBase64(authConfig)
@@ -45,11 +47,11 @@ func (cli *DockerCli) CmdSearch(args ...string) error {
 	}
 
 	options := types.ImageSearchOptions{
-		Term:         name,
-		RegistryAuth: encodedAuth,
+		RegistryAuth:  encodedAuth,
+		PrivilegeFunc: requestPrivilege,
 	}
 
-	unorderedResults, err := cli.client.ImageSearch(options, requestPrivilege)
+	unorderedResults, err := cli.client.ImageSearch(context.Background(), name, options)
 	if err != nil {
 		return err
 	}

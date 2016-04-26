@@ -106,7 +106,7 @@ arbitrary containers.
 For this reason, the REST API endpoint (used by the Docker CLI to
 communicate with the Docker daemon) changed in Docker 0.5.2, and now
 uses a UNIX socket instead of a TCP socket bound on 127.0.0.1 (the
-latter being prone to cross-site-scripting attacks if you happen to run
+latter being prone to cross-site request forgery attacks if you happen to run
 Docker directly on your local machine, outside of a VM). You can then
 use traditional UNIX permission checks to limit access to the control
 socket.
@@ -198,7 +198,7 @@ to the host.
 This won't affect regular web apps; but malicious users will find that
 the arsenal at their disposal has shrunk considerably! By default Docker
 drops all capabilities except [those
-needed](https://github.com/docker/docker/blob/87de5fdd5972343a11847922e0f41d9898b5cff7/daemon/execdriver/native/template/default_template_linux.go#L16-L29),
+needed](https://github.com/docker/docker/blob/master/oci/defaults_linux.go#L64-L79),
 a whitelist instead of a blacklist approach. You can see a full list of
 available capabilities in [Linux
 manpages](http://man7.org/linux/man-pages/man7/capabilities.7.html).
@@ -243,26 +243,16 @@ with e.g., special network topologies or shared filesystems, you can
 expect to see tools to harden existing Docker containers without
 affecting Docker's core.
 
-Recent improvements in Linux namespaces will soon allow to run
-full-featured containers without root privileges, thanks to the new user
-namespace. This is covered in detail [here](
-http://s3hh.wordpress.com/2013/07/19/creating-and-using-containers-without-privilege/).
-Moreover, this will solve the problem caused by sharing filesystems
-between host and guest, since the user namespace allows users within
-containers (including the root user) to be mapped to other users in the
-host system.
+As of Docker 1.10 User Namespaces are supported directly by the docker
+daemon. This feature allows for the root user in a container to be mapped
+to a non uid-0 user outside the container, which can help to mitigate the
+risks of container breakout. This facility is available but not enabled
+by default.
 
-Today, Docker does not directly support user namespaces, but they
-may still be utilized by Docker containers on supported kernels,
-by directly using the clone syscall, or utilizing the 'unshare'
-utility. Using this, some users may find it possible to drop
-more capabilities from their process as user namespaces provide
-an artificial capabilities set. Likewise, however, this artificial
-capabilities set may require use of 'capsh' to restrict the
-user-namespace capabilities set when using 'unshare'.
-
-Eventually, it is expected that Docker will have direct, native support
-for user-namespaces, simplifying the process of hardening containers.
+Refer to the [daemon command](../reference/commandline/daemon.md#daemon-user-namespace-options)
+in the command line reference for more information on this feature.
+Additional information on the implementation of User Namespaces in Docker
+can be found in <a href="https://integratedcode.us/2015/10/13/user-namespaces-have-arrived-in-docker/" target="_blank">this blog post</a>.
 
 ## Conclusions
 

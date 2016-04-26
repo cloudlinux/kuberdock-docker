@@ -5,8 +5,11 @@ import (
 	"io"
 	"os"
 
+	"golang.org/x/net/context"
+
 	Cli "github.com/docker/docker/cli"
 	"github.com/docker/docker/pkg/jsonmessage"
+	// FIXME migrate to docker/distribution/reference
 	"github.com/docker/docker/reference"
 	"github.com/docker/docker/registry"
 	runconfigopts "github.com/docker/docker/runconfig/opts"
@@ -16,22 +19,10 @@ import (
 	networktypes "github.com/docker/engine-api/types/network"
 )
 
-func (cli *DockerCli) pullImage(image string) error {
-	return cli.pullImageCustomOut(image, cli.out)
-}
-
-func (cli *DockerCli) pullImageCustomOut(image string, out io.Writer) error {
+func (cli *DockerCli) pullImage(image string, out io.Writer) error {
 	ref, err := reference.ParseNamed(image)
 	if err != nil {
 		return err
-	}
-
-	var tag string
-	switch x := reference.WithDefaultTag(ref).(type) {
-	case reference.Canonical:
-		tag = x.Digest().String()
-	case reference.NamedTagged:
-		tag = x.Tag()
 	}
 
 	// Resolve the Repository name from fqn to RepositoryInfo
@@ -40,19 +31,17 @@ func (cli *DockerCli) pullImageCustomOut(image string, out io.Writer) error {
 		return err
 	}
 
-	authConfig := cli.resolveAuthConfig(cli.configFile.AuthConfigs, repoInfo.Index)
+	authConfig := cli.resolveAuthConfig(repoInfo.Index)
 	encodedAuth, err := encodeAuthToBase64(authConfig)
 	if err != nil {
 		return err
 	}
 
 	options := types.ImageCreateOptions{
-		Parent:       ref.Name(),
-		Tag:          tag,
 		RegistryAuth: encodedAuth,
 	}
 
-	responseBody, err := cli.client.ImageCreate(options)
+	responseBody, err := cli.client.ImageCreate(context.Background(), image, options)
 	if err != nil {
 		return err
 	}
@@ -90,33 +79,34 @@ func (cli *DockerCli) createContainer(config *container.Config, hostConfig *cont
 		defer containerIDFile.Close()
 	}
 
-	ref, err := reference.ParseNamed(config.Image)
+	var trustedRef reference.Canonical
+	_, ref, err := reference.ParseIDOrReference(config.Image)
 	if err != nil {
 		return nil, err
 	}
-	ref = reference.WithDefaultTag(ref)
+	if ref != nil {
+		ref = reference.WithDefaultTag(ref)
 
-	var trustedRef reference.Canonical
-
-	if ref, ok := ref.(reference.NamedTagged); ok && isTrusted() {
-		var err error
-		trustedRef, err = cli.trustedReference(ref)
-		if err != nil {
-			return nil, err
+		if ref, ok := ref.(reference.NamedTagged); ok && isTrusted() {
+			var err error
+			trustedRef, err = cli.trustedReference(ref)
+			if err != nil {
+				return nil, err
+			}
+			config.Image = trustedRef.String()
 		}
-		config.Image = trustedRef.String()
 	}
 
 	//create the container
-	response, err := cli.client.ContainerCreate(config, hostConfig, networkingConfig, name)
+	response, err := cli.client.ContainerCreate(context.Background(), config, hostConfig, networkingConfig, name)
 
 	//if image not found try to pull it
 	if err != nil {
-		if client.IsErrImageNotFound(err) {
+		if client.IsErrImageNotFound(err) && ref != nil {
 			fmt.Fprintf(cli.err, "Unable to find image '%s' locally\n", ref.String())
 
 			// we don't want to write to stdout anything apart from container.ID
-			if err = cli.pullImageCustomOut(config.Image, cli.err); err != nil {
+			if err = cli.pullImage(config.Image, cli.err); err != nil {
 				return nil, err
 			}
 			if ref, ok := ref.(reference.NamedTagged); ok && trustedRef != nil {
@@ -126,7 +116,7 @@ func (cli *DockerCli) createContainer(config *container.Config, hostConfig *cont
 			}
 			// Retry
 			var retryErr error
-			response, retryErr = cli.client.ContainerCreate(config, hostConfig, networkingConfig, name)
+			response, retryErr = cli.client.ContainerCreate(context.Background(), config, hostConfig, networkingConfig, name)
 			if retryErr != nil {
 				return nil, retryErr
 			}

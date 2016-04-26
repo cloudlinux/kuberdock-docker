@@ -10,8 +10,7 @@ import (
 )
 
 func (s *DockerSuite) TestKillContainer(c *check.C) {
-	testRequires(c, DaemonIsLinux)
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "top")
+	out, _ := runSleepingContainer(c, "-d")
 	cleanedContainerID := strings.TrimSpace(out)
 	c.Assert(waitRun(cleanedContainerID), check.IsNil)
 
@@ -22,9 +21,8 @@ func (s *DockerSuite) TestKillContainer(c *check.C) {
 
 }
 
-func (s *DockerSuite) TestKillofStoppedContainer(c *check.C) {
-	testRequires(c, DaemonIsLinux)
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "top")
+func (s *DockerSuite) TestKillOffStoppedContainer(c *check.C) {
+	out, _ := runSleepingContainer(c, "-d")
 	cleanedContainerID := strings.TrimSpace(out)
 
 	dockerCmd(c, "stop", cleanedContainerID)
@@ -34,6 +32,7 @@ func (s *DockerSuite) TestKillofStoppedContainer(c *check.C) {
 }
 
 func (s *DockerSuite) TestKillDifferentUserContainer(c *check.C) {
+	// TODO Windows: Windows does not yet support -u (Feb 2016).
 	testRequires(c, DaemonIsLinux)
 	out, _ := dockerCmd(c, "run", "-u", "daemon", "-d", "busybox", "top")
 	cleanedContainerID := strings.TrimSpace(out)
@@ -48,6 +47,7 @@ func (s *DockerSuite) TestKillDifferentUserContainer(c *check.C) {
 
 // regression test about correct signal parsing see #13665
 func (s *DockerSuite) TestKillWithSignal(c *check.C) {
+	// Cannot port to Windows - does not support signals in the same was a Linux does
 	testRequires(c, DaemonIsLinux)
 	out, _ := dockerCmd(c, "run", "-d", "busybox", "top")
 	cid := strings.TrimSpace(out)
@@ -55,14 +55,13 @@ func (s *DockerSuite) TestKillWithSignal(c *check.C) {
 
 	dockerCmd(c, "kill", "-s", "SIGWINCH", cid)
 
-	running, _ := inspectField(cid, "State.Running")
+	running := inspectField(c, cid, "State.Running")
 
 	c.Assert(running, checker.Equals, "true", check.Commentf("Container should be in running state after SIGWINCH"))
 }
 
 func (s *DockerSuite) TestKillWithInvalidSignal(c *check.C) {
-	testRequires(c, DaemonIsLinux)
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "top")
+	out, _ := runSleepingContainer(c, "-d")
 	cid := strings.TrimSpace(out)
 	c.Assert(waitRun(cid), check.IsNil)
 
@@ -70,10 +69,10 @@ func (s *DockerSuite) TestKillWithInvalidSignal(c *check.C) {
 	c.Assert(err, check.NotNil)
 	c.Assert(out, checker.Contains, "Invalid signal: 0", check.Commentf("Kill with an invalid signal didn't error out correctly"))
 
-	running, _ := inspectField(cid, "State.Running")
+	running := inspectField(c, cid, "State.Running")
 	c.Assert(running, checker.Equals, "true", check.Commentf("Container should be in running state after an invalid signal"))
 
-	out, _ = dockerCmd(c, "run", "-d", "busybox", "top")
+	out, _ = runSleepingContainer(c, "-d")
 	cid = strings.TrimSpace(out)
 	c.Assert(waitRun(cid), check.IsNil)
 
@@ -81,14 +80,13 @@ func (s *DockerSuite) TestKillWithInvalidSignal(c *check.C) {
 	c.Assert(err, check.NotNil)
 	c.Assert(out, checker.Contains, "Invalid signal: SIG42", check.Commentf("Kill with an invalid signal error out correctly"))
 
-	running, _ = inspectField(cid, "State.Running")
+	running = inspectField(c, cid, "State.Running")
 	c.Assert(running, checker.Equals, "true", check.Commentf("Container should be in running state after an invalid signal"))
 
 }
 
 func (s *DockerSuite) TestKillStoppedContainerAPIPre120(c *check.C) {
-	testRequires(c, DaemonIsLinux)
-	dockerCmd(c, "run", "--name", "docker-kill-test-api", "-d", "busybox", "top")
+	runSleepingContainer(c, "--name", "docker-kill-test-api", "-d")
 	dockerCmd(c, "stop", "docker-kill-test-api")
 
 	status, _, err := sockRequest("POST", fmt.Sprintf("/v1.19/containers/%s/kill", "docker-kill-test-api"), nil)

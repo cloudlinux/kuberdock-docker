@@ -23,7 +23,7 @@ build: ${build_image}.created
 
 build-local:
 	@mkdir -p "bin"
-	$(shell which godep) go build -o "bin/dnet" ./cmd/dnet
+	$(shell which godep) go build -tags experimental -o "bin/dnet" ./cmd/dnet
 
 clean:
 	@if [ -d bin ]; then \
@@ -53,7 +53,7 @@ check-code:
 
 check-format:
 	@echo "Checking format... "
-	test -z "$$(goimports -l . | grep -v Godeps/_workspace/src/ | tee /dev/stderr)"
+	test -z "$$(gofmt -s -l . | grep -v Godeps/_workspace/src/ | tee /dev/stderr)"
 	@echo "Done checking format"
 
 run-tests:

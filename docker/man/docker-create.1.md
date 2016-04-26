@@ -58,12 +58,16 @@ docker-create - Create a new container
 [**-P**|**--publish-all**]
 [**-p**|**--publish**[=*[]*]]
 [**--pid**[=*[]*]]
+[**--userns**[=*[]*]]
+[**--pids-limit**[=*PIDS_LIMIT*]]
 [**--privileged**]
 [**--read-only**]
 [**--restart**[=*RESTART*]]
 [**--security-opt**[=*[]*]]
+[**--storage-opt**[=*[]*]]
 [**--stop-signal**[=*SIGNAL*]]
 [**--shm-size**[=*[]*]]
+[**--sysctl**[=*[]*]]
 [**-t**|**--tty**]
 [**--tmpfs**[=*[CONTAINER-DIR[:<OPTIONS>]*]]
 [**-u**|**--user**[=*USER*]]
@@ -214,7 +218,7 @@ millions of trillions.
    Add link to another container in the form of <name or id>:alias or just
    <name or id> in which case the alias will match the name.
 
-**--log-driver**="*json-file*|*syslog*|*journald*|*gelf*|*fluentd*|*awslogs*|*splunk*|*none*"
+**--log-driver**="*json-file*|*syslog*|*journald*|*gelf*|*fluentd*|*awslogs*|*splunk*|*etwlogs*|*gcplogs*|*none*"
   Logging driver for container. Default is defined by daemon `--log-driver` flag.
   **Warning**: the `docker logs` command works only for the `json-file` and
   `journald` logging drivers.
@@ -290,6 +294,13 @@ unit, `b` is used. Set LIMIT to `-1` to enable unlimited swap.
      **host**: use the host's PID namespace inside the container.
      Note: the host mode gives the container full access to local PID and is therefore considered insecure.
 
+**--userns**=""
+   Set the usernamespace mode for the container when `userns-remap` option is enabled.
+     **host**: use the host usernamespace and enable all privileged options (e.g., `pid=host` or `--privileged`).
+
+**--pids-limit**=""
+   Tune the container's pids limit. Set `-1` to have unlimited pids for the container.
+
 **--privileged**=*true*|*false*
    Give extended privileges to this container. The default is *false*.
 
@@ -307,8 +318,39 @@ unit, `b` is used. Set LIMIT to `-1` to enable unlimited swap.
 **--security-opt**=[]
    Security Options
 
+   "label:user:USER"   : Set the label user for the container
+    "label:role:ROLE"   : Set the label role for the container
+    "label:type:TYPE"   : Set the label type for the container
+    "label:level:LEVEL" : Set the label level for the container
+    "label:disable"     : Turn off label confinement for the container
+    "no-new-privileges" : Disable container processes from gaining additional privileges
+    "seccomp:unconfined" : Turn off seccomp confinement for the container
+    "seccomp:profile.json :  White listed syscalls seccomp Json file to be used as a seccomp filter
+
+**--storage-opt**=[]
+   Storage driver options per container
+
+   $ docker create -it --storage-opt size=120G fedora /bin/bash
+
+   This (size) will allow to set the container rootfs size to 120G at creation time. User cannot pass a size less than the Default BaseFS Size.
+  
 **--stop-signal**=*SIGTERM*
   Signal to stop a container. Default is SIGTERM.
+
+**--sysctl**=SYSCTL
+  Configure namespaced kernel parameters at runtime
+
+  IPC Namespace - current sysctls allowed:
+
+  kernel.msgmax, kernel.msgmnb, kernel.msgmni, kernel.sem, kernel.shmall, kernel.shmmax, kernel.shmmni, kernel.shm_rmid_forced
+  Sysctls beginning with fs.mqueue.*
+
+  Note: if you use --ipc=host using these sysctls will not be allowed.
+
+  Network Namespace - current sysctls allowed:
+      Sysctls beginning with net.*
+
+  Note: if you use --net=host using these sysctls will not be allowed.
 
 **-t**, **--tty**=*true*|*false*
    Allocate a pseudo-TTY. The default is *false*.
@@ -415,6 +457,10 @@ change propagation properties of source mount. Say `/` is source mount for
 > see mount propagation changes made on the mount point. For example, if this value
 > is `slave`, you may not be able to use the `shared` or `rshared` propagation on
 > a volume.
+
+
+To disable automatic copying of data from the container path to the volume, use
+the `nocopy` flag. The `nocopy` flag can be set on bind mounts and named volumes.
 
 **--volume-driver**=""
    Container's volume driver. This driver creates volumes specified either from

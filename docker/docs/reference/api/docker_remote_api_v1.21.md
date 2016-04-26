@@ -158,14 +158,9 @@ Create a container
                    "com.example.license": "GPL",
                    "com.example.version": "1.0"
            },
-           "Mounts": [
-             {
-               "Source": "/data",
-               "Destination": "/data",
-               "Mode": "ro,Z",
-               "RW": false
-             }
-           ],
+           "Volumes": {
+             "/volumes/data": {}
+           },
            "WorkingDir": "",
            "NetworkDisabled": false,
            "MacAddress": "12:34:56:78:9a:bc",
@@ -204,9 +199,10 @@ Create a container
              "RestartPolicy": { "Name": "", "MaximumRetryCount": 0 },
              "NetworkMode": "bridge",
              "Devices": [],
+             "Sysctls": { "net.ipv4.ip_forward": "1" },
              "Ulimits": [{}],
              "LogConfig": { "Type": "json-file", "Config": {} },
-             "SecurityOpt": [""],
+             "SecurityOpt": [],
              "CgroupParent": "",
              "VolumeDriver": ""
           }
@@ -229,21 +225,6 @@ Json Parameters:
 -   **Domainname** - A string value containing the domain name to use
       for the container.
 -   **User** - A string value specifying the user inside the container.
--   **Memory** - Memory limit in bytes.
--   **MemorySwap** - Total memory limit (memory + swap); set `-1` to enable unlimited swap.
-      You must use this with `memory` and make the swap value larger than `memory`.
--   **MemoryReservation** - Memory soft limit in bytes.
--   **KernelMemory** - Kernel memory limit in bytes.
--   **CpuShares** - An integer value containing the container's CPU Shares
-      (ie. the relative weight vs other containers).
--   **CpuPeriod** - The length of a CPU period in microseconds.
--   **CpuQuota** - Microseconds of CPU time that the container can get in a CPU period.
--   **Cpuset** - Deprecated please don't use. Use `CpusetCpus` instead.
--   **CpusetCpus** - String value containing the `cgroups CpusetCpus` to use.
--   **CpusetMems** - Memory nodes (MEMs) in which to allow execution (0-3, 0,1). Only effective on NUMA systems.
--   **BlkioWeight** - Block IO weight (relative weight) accepts a weight value between 10 and 1000.
--   **MemorySwappiness** - Tune a container's memory swappiness behavior. Accepts an integer between 0 and 100.
--   **OomKillDisable** - Boolean value, whether to disable OOM Killer for the container or not.
 -   **AttachStdin** - Boolean value, attaches to `stdin`.
 -   **AttachStdout** - Boolean value, attaches to `stdout`.
 -   **AttachStderr** - Boolean value, attaches to `stderr`.
@@ -256,7 +237,8 @@ Json Parameters:
 -   **Entrypoint** - Set the entry point for the container as a string or an array
       of strings.
 -   **Image** - A string specifying the image name to use for the container.
--   **Mounts** - An array of mount points in the container.
+-   **Volumes** - An object mapping mount point paths (strings) inside the
+      container to empty objects.
 -   **WorkingDir** - A string specifying the working directory for commands to
       run in.
 -   **NetworkDisabled** - Boolean value, when true disables networking for the
@@ -275,6 +257,20 @@ Json Parameters:
           in the form of `container_name:alias`.
     -   **LxcConf** - LXC specific configurations. These configurations only
           work when using the `lxc` execution driver.
+    -   **Memory** - Memory limit in bytes.
+    -   **MemorySwap** - Total memory limit (memory + swap); set `-1` to enable unlimited swap.
+          You must use this with `memory` and make the swap value larger than `memory`.
+    -   **MemoryReservation** - Memory soft limit in bytes.
+    -   **KernelMemory** - Kernel memory limit in bytes.
+    -   **CpuShares** - An integer value containing the container's CPU Shares
+          (ie. the relative weight vs other containers).
+    -   **CpuPeriod** - The length of a CPU period in microseconds.
+    -   **CpuQuota** - Microseconds of CPU time that the container can get in a CPU period.
+    -   **CpusetCpus** - String value containing the `cgroups CpusetCpus` to use.
+    -   **CpusetMems** - Memory nodes (MEMs) in which to allow execution (0-3, 0,1). Only effective on NUMA systems.
+    -   **BlkioWeight** - Block IO weight (relative weight) accepts a weight value between 10 and 1000.
+    -   **MemorySwappiness** - Tune a container's memory swappiness behavior. Accepts an integer between 0 and 100.
+    -   **OomKillDisable** - Boolean value, whether to disable OOM Killer for the container or not.
     -   **PortBindings** - A map of exposed container ports and the host port they
           should map to. A JSON object in the form
           `{ <port>/<protocol>: [{ "HostPort": "<port>" }] }`
@@ -305,10 +301,15 @@ Json Parameters:
             An ever increasing delay (double the previous delay, starting at 100mS)
             is added before each restart to prevent flooding the server.
     -   **NetworkMode** - Sets the networking mode for the container. Supported
-          values are: `bridge`, `host`, and `container:<name|id>`
+          standard values are: `bridge`, `host`, `none`, and `container:<name|id>`. Any other value is taken
+          as a custom network's name to which this container should connect to.
     -   **Devices** - A list of devices to add to the container specified as a JSON object in the
       form
           `{ "PathOnHost": "/dev/deviceName", "PathInContainer": "/dev/deviceName", "CgroupPermissions": "mrw"}`
+    -   **Sysctls** - A list of kernel parameters (sysctls) to set in the container, specified as
+          `{ <name>: <Value> }`, for example:
+	  `{ "net.ipv4.ip_forward": "1" }`
+
     -   **Ulimits** - A list of ulimits to set in the container, specified as
           `{ "Name": <name>, "Soft": <soft limit>, "Hard": <hard limit> }`, for example:
           `Ulimits: { "Name": "nofile", "Soft": 1024, "Hard": 2048 }`
@@ -335,7 +336,7 @@ Status Codes:
 
 ### Inspect a container
 
-`GET /containers/(id)/json`
+`GET /containers/(id or name)/json`
 
 Return low-level information on the container `id`
 
@@ -429,6 +430,9 @@ Return low-level information on the container `id`
 				"Type": "json-file"
 			},
 			"SecurityOpt": null,
+			"Sysctls": {
+			        "net.ipv4.ip_forward": "1"
+			},
 			"VolumesFrom": null,
 			"Ulimits": [{}],
 			"VolumeDriver": ""
@@ -525,7 +529,7 @@ Status Codes:
 
 ### List processes running inside a container
 
-`GET /containers/(id)/top`
+`GET /containers/(id or name)/top`
 
 List processes running inside the container `id`. On Unix systems this
 is done by running the `ps` command. This endpoint is not
@@ -589,7 +593,7 @@ Status Codes:
 
 ### Get container logs
 
-`GET /containers/(id)/logs`
+`GET /containers/(id or name)/logs`
 
 Get `stdout` and `stderr` logs from the container ``id``
 
@@ -629,7 +633,7 @@ Status Codes:
 
 ### Inspect changes on a container's filesystem
 
-`GET /containers/(id)/changes`
+`GET /containers/(id or name)/changes`
 
 Inspect changes on container `id`'s filesystem
 
@@ -671,7 +675,7 @@ Status Codes:
 
 ### Export a container
 
-`GET /containers/(id)/export`
+`GET /containers/(id or name)/export`
 
 Export the contents of container `id`
 
@@ -694,7 +698,7 @@ Status Codes:
 
 ### Get container stats based on resource usage
 
-`GET /containers/(id)/stats`
+`GET /containers/(id or name)/stats`
 
 This endpoint returns a live stream of a container's resource usage statistics.
 
@@ -772,19 +776,36 @@ This endpoint returns a live stream of a container's resource usage statistics.
          "cpu_stats" : {
             "cpu_usage" : {
                "percpu_usage" : [
-                  16970827,
-                  1839451,
-                  7107380,
-                  10571290
+                  8646879,
+                  24472255,
+                  36438778,
+                  30657443
                ],
-               "usage_in_usermode" : 10000000,
-               "total_usage" : 36488948,
-               "usage_in_kernelmode" : 20000000
+               "usage_in_usermode" : 50000000,
+               "total_usage" : 100215355,
+               "usage_in_kernelmode" : 30000000
             },
-            "system_cpu_usage" : 20091722000000000,
-            "throttling_data" : {}
+            "system_cpu_usage" : 739306590000000,
+            "throttling_data" : {"periods":0,"throttled_periods":0,"throttled_time":0}
+         },
+         "precpu_stats" : {
+            "cpu_usage" : {
+               "percpu_usage" : [
+                  8646879,
+                  24350896,
+                  36438778,
+                  30657443
+               ],
+               "usage_in_usermode" : 50000000,
+               "total_usage" : 100093996,
+               "usage_in_kernelmode" : 30000000
+            },
+            "system_cpu_usage" : 9492140000000,
+            "throttling_data" : {"periods":0,"throttled_periods":0,"throttled_time":0}
          }
       }
+
+The precpu_stats is the cpu statistic of last read, which is used for calculating the cpu usage percent. It is not the exact copy of the “cpu_stats” field.
 
 Query Parameters:
 
@@ -798,7 +819,7 @@ Status Codes:
 
 ### Resize a container TTY
 
-`POST /containers/(id)/resize`
+`POST /containers/(id or name)/resize`
 
 Resize the TTY for container with  `id`. The unit is number of characters. You must restart the container for the resize to take effect.
 
@@ -825,7 +846,7 @@ Status Codes:
 
 ### Start a container
 
-`POST /containers/(id)/start`
+`POST /containers/(id or name)/start`
 
 Start the container `id`
 
@@ -835,7 +856,7 @@ Start the container `id`
 
 **Example request**:
 
-    POST /containers/(id)/start HTTP/1.1
+    POST /containers/e90e34656806/start HTTP/1.1
 
 **Example response**:
 
@@ -850,7 +871,7 @@ Status Codes:
 
 ### Stop a container
 
-`POST /containers/(id)/stop`
+`POST /containers/(id or name)/stop`
 
 Stop the container `id`
 
@@ -875,7 +896,7 @@ Status Codes:
 
 ### Restart a container
 
-`POST /containers/(id)/restart`
+`POST /containers/(id or name)/restart`
 
 Restart the container `id`
 
@@ -899,7 +920,7 @@ Status Codes:
 
 ### Kill a container
 
-`POST /containers/(id)/kill`
+`POST /containers/(id or name)/kill`
 
 Kill the container `id`
 
@@ -924,7 +945,7 @@ Status Codes:
 
 ### Rename a container
 
-`POST /containers/(id)/rename`
+`POST /containers/(id or name)/rename`
 
 Rename the container `id` to a `new_name`
 
@@ -949,7 +970,7 @@ Status Codes:
 
 ### Pause a container
 
-`POST /containers/(id)/pause`
+`POST /containers/(id or name)/pause`
 
 Pause the container `id`
 
@@ -969,7 +990,7 @@ Status Codes:
 
 ### Unpause a container
 
-`POST /containers/(id)/unpause`
+`POST /containers/(id or name)/unpause`
 
 Unpause the container `id`
 
@@ -989,7 +1010,7 @@ Status Codes:
 
 ### Attach to a container
 
-`POST /containers/(id)/attach`
+`POST /containers/(id or name)/attach`
 
 Attach to the container `id`
 
@@ -1072,7 +1093,7 @@ Status Codes:
 
 ### Attach to a container (websocket)
 
-`GET /containers/(id)/attach/ws`
+`GET /containers/(id or name)/attach/ws`
 
 Attach to the container `id` via websocket
 
@@ -1107,7 +1128,7 @@ Status Codes:
 
 ### Wait a container
 
-`POST /containers/(id)/wait`
+`POST /containers/(id or name)/wait`
 
 Block until container `id` stops, then returns the exit code
 
@@ -1130,7 +1151,7 @@ Status Codes:
 
 ### Remove a container
 
-`DELETE /containers/(id)`
+`DELETE /containers/(id or name)`
 
 Remove the container `id` from the filesystem
 
@@ -1158,7 +1179,7 @@ Status Codes:
 
 ### Copy files or folders from a container
 
-`POST /containers/(id)/copy`
+`POST /containers/(id or name)/copy`
 
 Copy files or folders of container `id`
 
@@ -1188,14 +1209,14 @@ Status Codes:
 
 ### Retrieving information about files and folders in a container
 
-`HEAD /containers/(id)/archive`
+`HEAD /containers/(id or name)/archive`
 
 See the description of the `X-Docker-Container-Path-Stat` header in the
 following section.
 
 ### Get an archive of a filesystem resource in a container
 
-`GET /containers/(id)/archive`
+`GET /containers/(id or name)/archive`
 
 Get an tar archive of a resource in the filesystem of container `id`.
 
@@ -1256,7 +1277,7 @@ Status Codes:
 
 ### Extract an archive of files or folders to a directory in a container
 
-`PUT /containers/(id)/archive`
+`PUT /containers/(id or name)/archive`
 
 Upload a tar archive to be extracted to a path in the filesystem of container
 `id`.
@@ -1755,7 +1776,7 @@ Tag the image `name` into a repository
 
 **Example response**:
 
-    HTTP/1.1 201 OK
+    HTTP/1.1 201 Created
 
 Query Parameters:
 
@@ -1903,11 +1924,11 @@ Display system-wide information
     Content-Type: application/json
 
     {
+        "ClusterStore": "etcd://localhost:2379",
         "Containers": 11,
         "CpuCfsPeriod": true,
         "CpuCfsQuota": true,
         "Debug": false,
-        "DiscoveryBackend": "etcd://localhost:2379",
         "DockerRootDir": "/var/lib/docker",
         "Driver": "btrfs",
         "DriverStatus": [[""]],
@@ -1948,9 +1969,9 @@ Display system-wide information
                 "127.0.0.0/8"
             ]
         },
+        "ServerVersion": "1.9.0",
         "SwapLimit": false,
         "SystemTime": "2015-03-10T11:11:23.730591467-07:00"
-        "ServerVersion": "1.9.0"
     }
 
 Status Codes:
@@ -2231,7 +2252,7 @@ the root that contains a list of repository and tag names mapped to layer IDs.
 
 ### Exec Create
 
-`POST /containers/(id)/exec`
+`POST /containers/(id or name)/exec`
 
 Sets up an exec instance in a running container `id`
 
@@ -2252,7 +2273,7 @@ Sets up an exec instance in a running container `id`
 
 **Example response**:
 
-    HTTP/1.1 201 OK
+    HTTP/1.1 201 Created
     Content-Type: application/json
 
     {
@@ -2296,8 +2317,8 @@ interactive session with the `exec` command.
 
 **Example response**:
 
-    HTTP/1.1 201 OK
-    Content-Type: application/json
+    HTTP/1.1 200 OK
+    Content-Type: application/vnd.docker.raw-stream
 
     {{ STREAM }}
 
@@ -2313,7 +2334,7 @@ Status Codes:
 -   **409** - container is paused
 
     **Stream details**:
-    Similar to the stream behavior of `POST /container/(id)/attach` API
+    Similar to the stream behavior of `POST /containers/(id or name)/attach` API
 
 ### Exec Resize
 
@@ -2329,7 +2350,7 @@ This API is valid only if `tty` was specified as part of creating and starting t
 
 **Example response**:
 
-    HTTP/1.1 201 OK
+    HTTP/1.1 201 Created
     Content-Type: text/plain
 
 Query Parameters:
@@ -2778,7 +2799,7 @@ JSON Parameters:
 
 `POST /networks/(id)/connect`
 
-Connects a container to a network
+Connect a container to a network
 
 **Example request**:
 
@@ -2809,7 +2830,7 @@ JSON Parameters:
 
 `POST /networks/(id)/disconnect`
 
-Disconnects a container from a network
+Disconnect a container from a network
 
 **Example request**:
 
