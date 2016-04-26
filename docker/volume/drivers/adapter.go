@@ -1,7 +1,8 @@
 package volumedrivers
 
 import (
-	"github.com/docker/docker/pkg/plugins"
+	"fmt"
+
 	"github.com/docker/docker/volume"
 )
 
@@ -15,27 +16,14 @@ func (a *volumeDriverAdapter) Name() string {
 }
 
 func (a *volumeDriverAdapter) Create(name string, opts map[string]string) (volume.Volume, error) {
-	// First try a Get. For drivers that support Get this will return any
-	// existing volume.
-	v, err := a.proxy.Get(name)
-	if v != nil {
-		return &volumeAdapter{
-			proxy:      a.proxy,
-			name:       v.Name,
-			driverName: a.Name(),
-			eMount:     v.Mountpoint,
-		}, nil
-	}
-
-	// Driver didn't support Get or volume didn't exist. Perform Create.
-	err = a.proxy.Create(name, opts)
-	if err != nil {
+	if err := a.proxy.Create(name, opts); err != nil {
 		return nil, err
 	}
 	return &volumeAdapter{
 		proxy:      a.proxy,
 		name:       name,
-		driverName: a.name}, nil
+		driverName: a.name,
+	}, nil
 }
 
 func (a *volumeDriverAdapter) Remove(v volume.Volume) error {
@@ -63,11 +51,12 @@ func (a *volumeDriverAdapter) List() ([]volume.Volume, error) {
 func (a *volumeDriverAdapter) Get(name string) (volume.Volume, error) {
 	v, err := a.proxy.Get(name)
 	if err != nil {
-		// TODO: remove this hack. Allows back compat with volume drivers that don't support this call
-		if !plugins.IsNotFound(err) {
-			return nil, err
-		}
-		return a.Create(name, nil)
+		return nil, err
+	}
+
+	// plugin may have returned no volume and no error
+	if v == nil {
+		return nil, fmt.Errorf("no such volume")
 	}
 
 	return &volumeAdapter{
@@ -75,6 +64,7 @@ func (a *volumeDriverAdapter) Get(name string) (volume.Volume, error) {
 		name:       v.Name,
 		driverName: a.Name(),
 		eMount:     v.Mountpoint,
+		status:     v.Status,
 	}, nil
 }
 
@@ -83,11 +73,13 @@ type volumeAdapter struct {
 	name       string
 	driverName string
 	eMount     string // ephemeral host volume path
+	status     map[string]interface{}
 }
 
 type proxyVolume struct {
 	Name       string
 	Mountpoint string
+	Status     map[string]interface{}
 }
 
 func (a *volumeAdapter) Name() string {
@@ -99,11 +91,14 @@ func (a *volumeAdapter) DriverName() string {
 }
 
 func (a *volumeAdapter) Path() string {
-	if len(a.eMount) > 0 {
-		return a.eMount
+	if len(a.eMount) == 0 {
+		a.eMount, _ = a.proxy.Path(a.name)
 	}
-	m, _ := a.proxy.Path(a.name)
-	return m
+	return a.eMount
+}
+
+func (a *volumeAdapter) CachedPath() string {
+	return a.eMount
 }
 
 func (a *volumeAdapter) Mount() (string, error) {
@@ -113,5 +108,17 @@ func (a *volumeAdapter) Mount() (string, error) {
 }
 
 func (a *volumeAdapter) Unmount() error {
-	return a.proxy.Unmount(a.name)
+	err := a.proxy.Unmount(a.name)
+	if err == nil {
+		a.eMount = ""
+	}
+	return err
+}
+
+func (a *volumeAdapter) Status() map[string]interface{} {
+	out := make(map[string]interface{}, len(a.status))
+	for k, v := range a.status {
+		out[k] = v
+	}
+	return out
 }

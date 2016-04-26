@@ -11,10 +11,12 @@ import (
 	"github.com/docker/docker/api"
 	"github.com/docker/docker/cli"
 	"github.com/docker/docker/cliconfig"
+	"github.com/docker/docker/cliconfig/credentials"
 	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/term"
 	"github.com/docker/engine-api/client"
+	"github.com/docker/go-connections/sockets"
 	"github.com/docker/go-connections/tlsconfig"
 )
 
@@ -124,6 +126,9 @@ func NewDockerCli(in io.ReadCloser, out, err io.Writer, clientFlags *cli.ClientF
 		if e != nil {
 			fmt.Fprintf(cli.err, "WARNING: Error loading config file:%v\n", e)
 		}
+		if !configFile.ContainsAuth() {
+			credentials.DetectDefaultStore(configFile)
+		}
 		cli.configFile = configFile
 
 		host, err := getServerHost(clientFlags.Common.Hosts, clientFlags.Common.TLSOptions)
@@ -135,19 +140,19 @@ func NewDockerCli(in io.ReadCloser, out, err io.Writer, clientFlags *cli.ClientF
 		if customHeaders == nil {
 			customHeaders = map[string]string{}
 		}
-		customHeaders["User-Agent"] = "Docker-Client/" + dockerversion.Version + " (" + runtime.GOOS + ")"
+		customHeaders["User-Agent"] = clientUserAgent()
 
-		verStr := api.DefaultVersion.String()
+		verStr := api.DefaultVersion
 		if tmpStr := os.Getenv("DOCKER_API_VERSION"); tmpStr != "" {
 			verStr = tmpStr
 		}
 
-		clientTransport, err := newClientTransport(clientFlags.Common.TLSOptions)
+		httpClient, err := newHTTPClient(host, clientFlags.Common.TLSOptions)
 		if err != nil {
 			return err
 		}
 
-		client, err := client.NewClient(host, verStr, clientTransport, customHeaders)
+		client, err := client.NewClient(host, verStr, httpClient, customHeaders)
 		if err != nil {
 			return err
 		}
@@ -176,25 +181,35 @@ func getServerHost(hosts []string, tlsOptions *tlsconfig.Options) (host string, 
 		return "", errors.New("Please specify only one -H")
 	}
 
-	defaultHost := opts.DefaultTCPHost
-	if tlsOptions != nil {
-		defaultHost = opts.DefaultTLSHost
-	}
-
-	host, err = opts.ParseHost(defaultHost, host)
+	host, err = opts.ParseHost(tlsOptions != nil, host)
 	return
 }
 
-func newClientTransport(tlsOptions *tlsconfig.Options) (*http.Transport, error) {
+func newHTTPClient(host string, tlsOptions *tlsconfig.Options) (*http.Client, error) {
 	if tlsOptions == nil {
-		return &http.Transport{}, nil
+		// let the api client configure the default transport.
+		return nil, nil
 	}
 
 	config, err := tlsconfig.Client(*tlsOptions)
 	if err != nil {
 		return nil, err
 	}
-	return &http.Transport{
+	tr := &http.Transport{
 		TLSClientConfig: config,
+	}
+	proto, addr, _, err := client.ParseHost(host)
+	if err != nil {
+		return nil, err
+	}
+
+	sockets.ConfigureTransport(tr, proto, addr)
+
+	return &http.Client{
+		Transport: tr,
 	}, nil
+}
+
+func clientUserAgent() string {
+	return "Docker-Client/" + dockerversion.Version + " (" + runtime.GOOS + ")"
 }

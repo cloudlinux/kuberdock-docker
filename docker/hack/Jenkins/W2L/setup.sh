@@ -1,9 +1,10 @@
 # Jenkins CI script for Windows to Linux CI.
 # Heavily modified by John Howard (@jhowardmsft) December 2015 to try to make it more reliable.
-set +x
-SCRIPT_VER="4-Jan-2016 15:19 PST"
+set +xe
+SCRIPT_VER="Thu Feb 25 18:54:57 UTC 2016"
 
-# TODO to make (even) more resilient: 
+# TODO to make (even) more resilient:
+#  - Wait for daemon to be running before executing docker commands
 #  - Check if jq is installed
 #  - Make sure bash is v4.3 or later. Can't do until all Azure nodes on the latest version
 #  - Make sure we are not running as local system. Can't do until all Azure nodes are updated.
@@ -18,43 +19,72 @@ SCRIPT_VER="4-Jan-2016 15:19 PST"
 #  - Tidy up of images and containers. Either here, or in the teardown script.
 
 ec=0
+uniques=1
 echo INFO: Started at `date`. Script version $SCRIPT_VER
 
-# get the ip
+
+# !README!
+# There are two daemons running on the remote Linux host:
+# 	- outer: specified by DOCKER_HOST, this is the daemon that will build and run the inner docker daemon
+#			from the sources matching the PR.
+#	- inner: runs on the host network, on a port number similar to that of DOCKER_HOST but the last two digits are inverted
+#			(2357 if DOCKER_HOST had port 2375; and 2367 if DOCKER_HOST had port 2376).
+#			The windows integration tests are run against this inner daemon.
+
+# get the ip, inner and outer ports.
 ip="${DOCKER_HOST#*://}"
+port_outer="${ip#*:}"
+# inner port is like outer port with last two digits inverted.
+port_inner=$(echo "$port_outer" | sed -E 's/(.)(.)$/\2\1/')
 ip="${ip%%:*}"
 
-# make sure it is the right DOCKER_HOST. No, this is not a typo, it really
-# is at port 2357. This is the daemon which is running on the Linux host.
-# The way CI works is to launch a second daemon, docker-in-docker, which
-# listens on port 2375 and is built from sources matching the PR. That's the
-# one which is tested against.
-export DOCKER_HOST="tcp://$ip:2357"
+echo "INFO: IP=$ip PORT_OUTER=$port_outer PORT_INNER=$port_inner"
+
+# If TLS is enabled
+if [ -n "$DOCKER_TLS_VERIFY" ]; then
+	protocol=https
+	if [ -z "$DOCKER_MACHINE_NAME" ]; then
+		ec=1
+		echo "ERROR: DOCKER_MACHINE_NAME is undefined"
+	fi
+	certs=$(echo ~/.docker/machine/machines/$DOCKER_MACHINE_NAME)
+	curlopts="--cacert $certs/ca.pem --cert $certs/cert.pem --key $certs/key.pem"
+	run_extra_args="-v tlscerts:/etc/docker"
+	daemon_extra_args="--tlsverify --tlscacert /etc/docker/ca.pem --tlscert /etc/docker/server.pem --tlskey /etc/docker/server-key.pem"
+else
+	protocol=http
+fi
 
 # Save for use by make.sh and scripts it invokes
-export MAIN_DOCKER_HOST="$DOCKER_HOST"
-
+export MAIN_DOCKER_HOST="tcp://$ip:$port_inner"
 
 # Verify we can get the remote node to respond to _ping
 if [ $ec -eq 0 ]; then
-	reply=`curl -s http://$ip:2357/_ping`
+	reply=`curl -s $curlopts $protocol://$ip:$port_outer/_ping`
 	if [ "$reply" != "OK" ]; then
 		ec=1
-		echo "ERROR: Failed to get OK response from Linux node at $ip:2357. It may be down."
-		echo "       Try re-running this CI job, or ask on #docker-dev or #docker-maintainers"
-		echo "       to see if the node is up and running."
+		echo "ERROR: Failed to get an 'OK' response from the docker daemon on the Linux node"
+		echo "       at $ip:$port_outer when called with an http request for '_ping'. This implies that"
+		echo "       either the daemon has crashed/is not running, or the Linux node is unavailable."
 		echo
-		echo "Regular ping output for remote host below. It should reply. If not, it needs restarting."
+		echo "       A regular ping to the remote Linux node is below. It should reply. If not, the"
+		echo "       machine cannot be reached at all and may have crashed. If it does reply, it is"
+		echo "       likely a case of the Linux daemon not running or having crashed, which requires"
+		echo "       further investigation."
+		echo
+		echo "       Try re-running this CI job, or ask on #docker-dev or #docker-maintainers"
+		echo "       for someone to perform further diagnostics, or take this node out of rotation."
+		echo
 		ping $ip
 	else
 		echo "INFO: The Linux nodes outer daemon replied to a ping. Good!"
-	fi 
+	fi
 fi
 
 # Get the version from the remote node. Note this may fail if jq is not installed.
 # That's probably worth checking to make sure, just in case.
 if [ $ec -eq 0 ]; then
-	remoteVersion=`curl -s http://$ip:2357/version | jq -c '.Version'`
+	remoteVersion=`curl -s $curlopts $protocol://$ip:$port_outer/version | jq -c '.Version'`
 	echo "INFO: Remote daemon is running docker version $remoteVersion"
 fi
 
@@ -104,16 +134,16 @@ if [ $ec -eq 0 ]; then
 
 	# Force remove the image if it exists
 	! docker rmi -f "docker-$COMMITHASH" &>/dev/null
-	
+
 	# This SHOULD never happen, but just in case, also blow away any containers
-	# that might be around. 
+	# that might be around.
 	! if [ ! `docker ps -aq | wc -l` -eq 0 ]; then
 		echo WARN: There were some leftover containers. Cleaning them up.
 		! docker rm -f $(docker ps -aq)
 	fi
 fi
 
-# Provide the docker version for debugging purposes. If these fail, game over. 
+# Provide the docker version for debugging purposes. If these fail, game over.
 # as the Linux box isn't responding for some reason.
 if [ $ec -eq 0 ]; then
 	echo INFO: Docker version and info of the outer daemon on the Linux node
@@ -153,11 +183,12 @@ fi
 if [ $ec -eq 0 ]; then
 	echo "INFO: Starting build of a Linux daemon to test against, and starting it..."
 	set -x
-	docker run --pid host --privileged -d --name "docker-$COMMITHASH" --net host "docker:$COMMITHASH" bash -c 'echo "INFO: Compiling" && date && hack/make.sh binary && echo "INFO: Compile complete" && date && cp bundles/$(cat VERSION)/binary/docker /bin/docker && echo "INFO: Starting daemon" && exec docker daemon -D -H tcp://0.0.0.0:2375'
+	# aufs in aufs is faster than vfs in aufs
+	docker run $run_extra_args -e DOCKER_GRAPHDRIVER=aufs --pid host --privileged -d --name "docker-$COMMITHASH" --net host "docker:$COMMITHASH" bash -c "echo 'INFO: Compiling' && date && hack/make.sh binary && echo 'INFO: Compile complete' && date && cp bundles/$(cat VERSION)/binary/docker /bin/docker && echo 'INFO: Starting daemon' && exec docker daemon -D -H tcp://0.0.0.0:$port_inner $daemon_extra_args"
 	ec=$?
 	set +x
 	if [ 0 -ne $ec ]; then
-	    	echo "ERROR: Failed to compile and start the linux daemon"
+		echo "ERROR: Failed to compile and start the linux daemon"
 	fi
 fi
 
@@ -165,12 +196,12 @@ fi
 if [ $ec -eq 0 ]; then
 	echo "INFO: Starting local build of Windows binary..."
 	set -x
-	export TIMEOUT="120m"
-	export DOCKER_HOST="tcp://$ip:2375"
-	export DOCKER_TEST_HOST="tcp://$ip:2375"
+	export TIMEOUT="5m"
+	export DOCKER_HOST="tcp://$ip:$port_inner"
+	export DOCKER_TEST_HOST="tcp://$ip:$port_inner"
 	unset DOCKER_CLIENTONLY
 	export DOCKER_REMOTE_DAEMON=1
-	hack/make.sh binary 
+	hack/make.sh binary
 	ec=$?
 	set +x
 	if [ 0 -ne $ec ]; then
@@ -193,6 +224,8 @@ fi
 if [ $ec -eq 0 ]; then
 	echo "INFO: Running Integration tests..."
 	set -x
+	export DOCKER_TEST_TLS_VERIFY="$DOCKER_TLS_VERIFY"
+	export DOCKER_TEST_CERT_PATH="$DOCKER_CERT_PATH"
 	hack/make.sh test-integration-cli
 	ec=$?
 	set +x
@@ -212,29 +245,29 @@ fi
 GOVER_DOCKERFILE=`grep 'ENV GO_VERSION' Dockerfile | awk '{print $3}'`
 GOVER_INSTALLED=`go version | awk '{print $3}'`
 if [ "${GOVER_INSTALLED:2}" != "$GOVER_DOCKERFILE" ]; then
-	ec=1  # Uncomment to make CI fail once all nodes are updated.
+	#ec=1  # Uncomment to make CI fail once all nodes are updated.
 	echo
 	echo "---------------------------------------------------------------------------"
-	echo "ERROR: CI should be using go version $GOVER_DOCKERFILE, but is using ${GOVER_INSTALLED:2}"
-	echo "      This is currently a warning, but should (will) become an error in the future."
+	echo "WARN: CI should be using go version $GOVER_DOCKERFILE, but is using ${GOVER_INSTALLED:2}"
+	echo "      Please ping #docker-maintainers on IRC to get this CI server updated."
 	echo "---------------------------------------------------------------------------"
 	echo
 fi
 
 # Check the Linux box is running a matching version of docker
 if [ "$uniques" -ne 1 ]; then
-    ec=1  # Uncomment to make CI fail once all nodes are updated.
+    ec=0  # Uncomment to make CI fail once all nodes are updated.
 	echo
 	echo "---------------------------------------------------------------------------"
 	echo "ERROR: This CI node is not running the same version of docker as the daemon."
-	echo "       This is a CI configuration issue"
+	echo "       This is a CI configuration issue."
 	echo "---------------------------------------------------------------------------"
 	echo
 fi
 
 # Tell the user how we did.
 if [ $ec -eq 0 ]; then
-	echo INFO: Completed successfully at `date`. 
+	echo INFO: Completed successfully at `date`.
 else
 	echo ERROR: Failed with exitcode $ec at `date`.
 fi

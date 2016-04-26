@@ -2,26 +2,27 @@ package daemon
 
 import (
 	"encoding/json"
-	"io"
+	"errors"
+	"runtime"
 
-	"github.com/docker/docker/daemon/execdriver"
-	"github.com/docker/docker/pkg/version"
+	"golang.org/x/net/context"
+
+	"github.com/docker/docker/api/types/backend"
+	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/engine-api/types"
+	"github.com/docker/engine-api/types/versions"
 	"github.com/docker/engine-api/types/versions/v1p20"
 )
 
-// ContainerStatsConfig holds information for configuring the runtime
-// behavior of a daemon.ContainerStats() call.
-type ContainerStatsConfig struct {
-	Stream    bool
-	OutStream io.Writer
-	Stop      <-chan bool
-	Version   version.Version
-}
-
 // ContainerStats writes information about the container to the stream
 // given in the config object.
-func (daemon *Daemon) ContainerStats(prefixOrName string, config *ContainerStatsConfig) error {
+func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, config *backend.ContainerStatsConfig) error {
+	if runtime.GOOS == "windows" {
+		return errors.New("Windows does not support stats")
+	}
+	// Remote API version (used for backwards compatibility)
+	apiVersion := config.Version
+
 	container, err := daemon.GetContainer(prefixOrName)
 	if err != nil {
 		return err
@@ -32,26 +33,24 @@ func (daemon *Daemon) ContainerStats(prefixOrName string, config *ContainerStats
 		return json.NewEncoder(config.OutStream).Encode(&types.Stats{})
 	}
 
+	outStream := config.OutStream
 	if config.Stream {
-		// Write an empty chunk of data.
-		// This is to ensure that the HTTP status code is sent immediately,
-		// even if the container has not yet produced any data.
-		config.OutStream.Write(nil)
+		wf := ioutils.NewWriteFlusher(outStream)
+		defer wf.Close()
+		wf.Flush()
+		outStream = wf
 	}
 
 	var preCPUStats types.CPUStats
 	getStatJSON := func(v interface{}) *types.StatsJSON {
-		update := v.(*execdriver.ResourceStats)
-		ss := convertStatsToAPITypes(update.Stats)
+		ss := v.(types.StatsJSON)
 		ss.PreCPUStats = preCPUStats
-		ss.MemoryStats.Limit = uint64(update.MemoryLimit)
-		ss.Read = update.Read
-		ss.CPUStats.SystemUsage = update.SystemUsage
+		// ss.MemoryStats.Limit = uint64(update.MemoryLimit)
 		preCPUStats = ss.CPUStats
-		return ss
+		return &ss
 	}
 
-	enc := json.NewEncoder(config.OutStream)
+	enc := json.NewEncoder(outStream)
 
 	updates := daemon.subscribeToContainerStats(container)
 	defer daemon.unsubscribeToContainerStats(container, updates)
@@ -66,7 +65,7 @@ func (daemon *Daemon) ContainerStats(prefixOrName string, config *ContainerStats
 
 			var statsJSON interface{}
 			statsJSONPost120 := getStatJSON(v)
-			if config.Version.LessThan("1.21") {
+			if versions.LessThan(apiVersion, "1.21") {
 				var (
 					rxBytes   uint64
 					rxPackets uint64
@@ -117,7 +116,7 @@ func (daemon *Daemon) ContainerStats(prefixOrName string, config *ContainerStats
 			if !config.Stream {
 				return nil
 			}
-		case <-config.Stop:
+		case <-ctx.Done():
 			return nil
 		}
 	}

@@ -3,9 +3,11 @@
 package main
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/docker/docker/pkg/integration/checker"
 	"github.com/go-check/check"
@@ -19,6 +21,7 @@ func (s *DockerSuite) TestSaveAndLoadRepoStdout(c *check.C) {
 
 	repoName := "foobar-save-load-test"
 	before, _ := dockerCmd(c, "commit", name, repoName)
+	before = strings.TrimRight(before, "\n")
 
 	tmpFile, err := ioutil.TempFile("", "foobar-save-load-test.tar")
 	c.Assert(err, check.IsNil)
@@ -41,9 +44,10 @@ func (s *DockerSuite) TestSaveAndLoadRepoStdout(c *check.C) {
 	out, _, err := runCommandWithOutput(loadCmd)
 	c.Assert(err, check.IsNil, check.Commentf(out))
 
-	after, _ := dockerCmd(c, "inspect", "-f", "{{.Id}}", repoName)
+	after := inspectField(c, repoName, "Id")
+	after = strings.TrimRight(after, "\n")
 
-	c.Assert(before, check.Equals, after) //inspect is not the same after a save / load
+	c.Assert(after, check.Equals, before) //inspect is not the same after a save / load
 
 	deleteImages(repoName)
 
@@ -61,4 +65,23 @@ func (s *DockerSuite) TestSaveAndLoadRepoStdout(c *check.C) {
 	n, err := pty.Read(buf)
 	c.Assert(err, check.IsNil) //could not read tty output
 	c.Assert(string(buf[:n]), checker.Contains, "Cowardly refusing", check.Commentf("help output is not being yielded", out))
+}
+
+func (s *DockerSuite) TestSaveAndLoadWithProgressBar(c *check.C) {
+	name := "test-load"
+	_, err := buildImage(name, `
+	FROM busybox
+	RUN touch aa
+	`, true)
+	c.Assert(err, check.IsNil)
+
+	tmptar := name + ".tar"
+	dockerCmd(c, "save", "-o", tmptar, name)
+	defer os.Remove(tmptar)
+
+	dockerCmd(c, "rmi", name)
+	dockerCmd(c, "tag", "busybox", name)
+	out, _ := dockerCmd(c, "load", "-i", tmptar)
+	expected := fmt.Sprintf("The image %s:latest already exists, renaming the old one with ID", name)
+	c.Assert(out, checker.Contains, expected)
 }

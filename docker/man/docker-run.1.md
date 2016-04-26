@@ -60,14 +60,18 @@ docker-run - Run a command in a new container
 [**-P**|**--publish-all**]
 [**-p**|**--publish**[=*[]*]]
 [**--pid**[=*[]*]]
+[**--userns**[=*[]*]]
+[**--pids-limit**[=*PIDS_LIMIT*]]
 [**--privileged**]
 [**--read-only**]
 [**--restart**[=*RESTART*]]
 [**--rm**]
 [**--security-opt**[=*[]*]]
+[**--storage-opt**[=*[]*]]
 [**--stop-signal**[=*SIGNAL*]]
 [**--shm-size**[=*[]*]]
 [**--sig-proxy**[=*true*]]
+[**--sysctl**[=*[]*]]
 [**-t**|**--tty**]
 [**--tmpfs**[=*[CONTAINER-DIR[:<OPTIONS>]*]]
 [**-u**|**--user**[=*USER*]]
@@ -320,7 +324,7 @@ container can access the exposed port via a private networking interface. Docker
 will set some environment variables in the client container to help indicate
 which interface and port to use.
 
-**--log-driver**="*json-file*|*syslog*|*journald*|*gelf*|*fluentd*|*awslogs*|*splunk*|*none*"
+**--log-driver**="*json-file*|*syslog*|*journald*|*gelf*|*fluentd*|*awslogs*|*splunk*|*etwlogs*|*gcplogs*|*none*"
   Logging driver for container. Default is defined by daemon `--log-driver` flag.
   **Warning**: the `docker logs` command works only for the `json-file` and
   `journald` logging drivers.
@@ -420,6 +424,13 @@ Use `docker port` to see the actual mapping: `docker port CONTAINER $CONTAINERPO
      **host**: use the host's PID namespace inside the container.
      Note: the host mode gives the container full access to local PID and is therefore considered insecure.
 
+**--userns**=""
+   Set the usernamespace mode for the container when `userns-remap` option is enabled.
+     **host**: use the host usernamespace and enable all privileged options (e.g., `pid=host` or `--privileged`).
+
+**--pids-limit**=""
+   Tune the container's pids limit. Set `-1` to have unlimited pids for the container.
+
 **--uts**=*host*
    Set the UTS mode for the container
      **host**: use the host's UTS namespace inside the container.
@@ -454,12 +465,26 @@ its root filesystem mounted as read only prohibiting any writes.
 **--security-opt**=[]
    Security Options
 
-   "label:user:USER"   : Set the label user for the container
-    "label:role:ROLE"   : Set the label role for the container
-    "label:type:TYPE"   : Set the label type for the container
-    "label:level:LEVEL" : Set the label level for the container
-    "label:disable"     : Turn off label confinement for the container
+    "label=user:USER"   : Set the label user for the container
+    "label=role:ROLE"   : Set the label role for the container
+    "label=type:TYPE"   : Set the label type for the container
+    "label=level:LEVEL" : Set the label level for the container
+    "label=disable"     : Turn off label confinement for the container
+    "no-new-privileges" : Disable container processes from gaining additional privileges
 
+    "seccomp=unconfined" : Turn off seccomp confinement for the container
+    "seccomp=profile.json :  White listed syscalls seccomp Json file to be used as a seccomp filter
+
+    "apparmor=unconfined" : Turn off apparmor confinement for the container
+    "apparmor=your-profile" : Set the apparmor confinement profile for the container
+
+**--storage-opt**=[]
+   Storage driver options per container
+
+   $ docker run -it --storage-opt size=120G fedora /bin/bash
+
+   This (size) will allow to set the container rootfs size to 120G at creation time. User cannot pass a size less than the Default BaseFS Size.
+  
 **--stop-signal**=*SIGTERM*
   Signal to stop a container. Default is SIGTERM.
 
@@ -467,6 +492,21 @@ its root filesystem mounted as read only prohibiting any writes.
    Size of `/dev/shm`. The format is `<number><unit>`.
    `number` must be greater than `0`.  Unit is optional and can be `b` (bytes), `k` (kilobytes), `m`(megabytes), or `g` (gigabytes).
    If you omit the unit, the system uses bytes. If you omit the size entirely, the system uses `64m`.
+
+**--sysctl**=SYSCTL
+  Configure namespaced kernel parameters at runtime
+
+  IPC Namespace - current sysctls allowed:
+
+  kernel.msgmax, kernel.msgmnb, kernel.msgmni, kernel.sem, kernel.shmall, kernel.shmmax, kernel.shmmni, kernel.shm_rmid_forced
+  Sysctls beginning with fs.mqueue.*
+
+  If you use the `--ipc=host` option these sysctls will not be allowed.
+
+  Network Namespace - current sysctls allowed:
+      Sysctls beginning with net.*
+
+  If you use the `--net=host` option these sysctls will not be allowed.
 
 **--sig-proxy**=*true*|*false*
    Proxy received signals to the process (non-TTY mode only). SIGCHLD, SIGSTOP, and SIGKILL are not proxied. The default is *true*.
@@ -515,6 +555,7 @@ any options, the systems uses the following options:
    * [rw|ro]
    * [z|Z]
    * [`[r]shared`|`[r]slave`|`[r]private`]
+   * [nocopy]
 
 The `CONTAINER-DIR` must be an absolute path such as `/src/docs`. The `HOST-DIR`
 can be an absolute path or a `name` value. A `name` value must start with an
@@ -586,6 +627,9 @@ change propagation properties of source mount. Say `/` is source mount for
 > see mount propagation changes made on the mount point. For example, if this value
 > is `slave`, you may not be able to use the `shared` or `rshared` propagation on
 > a volume.
+
+To disable automatic copying of data from the container path to the volume, use
+the `nocopy` flag. The `nocopy` flag can be set on bind mounts and named volumes.
 
 **--volume-driver**=""
    Container's volume driver. This driver creates volumes specified either from
@@ -866,23 +910,23 @@ the `--security-opt` flag. For example, you can specify the MCS/MLS level, a
 requirement for MLS systems. Specifying the level in the following command
 allows you to share the same content between containers.
 
-    # docker run --security-opt label:level:s0:c100,c200 -i -t fedora bash
+    # docker run --security-opt label=level:s0:c100,c200 -i -t fedora bash
 
 An MLS example might be:
 
-    # docker run --security-opt label:level:TopSecret -i -t rhel7 bash
+    # docker run --security-opt label=level:TopSecret -i -t rhel7 bash
 
 To disable the security labeling for this container versus running with the
 `--permissive` flag, use the following command:
 
-    # docker run --security-opt label:disable -i -t fedora bash
+    # docker run --security-opt label=disable -i -t fedora bash
 
 If you want a tighter security policy on the processes within a container,
 you can specify an alternate type for the container. You could run a container
 that is only allowed to listen on Apache ports by executing the following
 command:
 
-    # docker run --security-opt label:type:svirt_apache_t -i -t centos bash
+    # docker run --security-opt label=type:svirt_apache_t -i -t centos bash
 
 Note:
 
@@ -926,6 +970,23 @@ If you have set the `--exec-opt isolation=hyperv` option on the Docker `daemon`,
 $ docker run -d --isolation default busybox top
 $ docker run -d --isolation hyperv busybox top
 ```
+
+## Setting Namespaced Kernel Parameters (Sysctls)
+
+The `--sysctl` sets namespaced kernel parameters (sysctls) in the
+container. For example, to turn on IP forwarding in the containers
+network namespace, run this command:
+
+    $ docker run --sysctl net.ipv4.ip_forward=1 someimage
+
+Note:
+
+Not all sysctls are namespaced. docker does not support changing sysctls
+inside of a container that also modify the host system. As the kernel 
+evolves we expect to see more sysctls become namespaced.
+
+See the definition of the `--sysctl` option above for the current list of 
+supported sysctls.
 
 # HISTORY
 April 2014, Originally compiled by William Henry (whenry at redhat dot com)

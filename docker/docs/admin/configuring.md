@@ -61,6 +61,24 @@ These options :
 The command line reference has the [complete list of daemon flags](../reference/commandline/daemon.md)
 with explanations.
 
+### Daemon debugging
+
+As noted above, setting the log level of the daemon to "debug" or enabling debug mode
+with `-D` allows the administrator or operator to gain much more knowledge about the
+runtime activity of the daemon. If faced with a non-responsive daemon, the administrator
+can force a full stack trace of all threads to be added to the daemon log by sending the
+`SIGUSR1` signal to the Docker daemon. A common way to send this signal is using the `kill`
+command on Linux systems. For example, `kill -USR1 <daemon-pid>` sends the `SIGUSR1`
+signal to the daemon process, causing the stack dump to be added to the daemon log.
+
+> **Note:** The log level setting of the daemon must be at least "info" level and above for
+> the stack trace to be saved to the logfile. By default the daemon's log level is set to
+> "info".
+
+The daemon will continue operating after handling the `SIGUSR1` signal and dumping the stack
+traces to the log. The stack traces can be used to determine the state of all goroutines and
+threads within the daemon.
+
 ## Ubuntu
 
 As of `14.04`, Ubuntu uses Upstart as a process manager. By default, Upstart jobs
@@ -144,7 +162,7 @@ can be located at `/var/log/upstart/docker.log`
 
     $ tail -f /var/log/upstart/docker.log
     INFO[0000] Loading containers: done.
-    INFO[0000] docker daemon: 1.6.0 4749651; execdriver: native-0.2; graphdriver: aufs
+    INFO[0000] Docker daemon commit=1b09a95-unsupported graphdriver=aufs version=1.11.0-dev
     INFO[0000] +job acceptconnections()
     INFO[0000] -job acceptconnections() = OK (0)
     INFO[0000] Daemon has completed initialization
@@ -255,7 +273,7 @@ be viewed using `journalctl -u docker`
     May 06 00:22:06 localhost.localdomain docker[2495]: time="2015-05-06T00:22:06Z" level="info" msg="-job init_networkdriver() = OK (0)"
     May 06 00:22:06 localhost.localdomain docker[2495]: time="2015-05-06T00:22:06Z" level="info" msg="Loading containers: start."
     May 06 00:22:06 localhost.localdomain docker[2495]: time="2015-05-06T00:22:06Z" level="info" msg="Loading containers: done."
-    May 06 00:22:06 localhost.localdomain docker[2495]: time="2015-05-06T00:22:06Z" level="info" msg="docker daemon: 1.5.0-dev fc0329b/1.5.0; execdriver: native-0.2; graphdriver: devicemapper"
+    May 06 00:22:06 localhost.localdomain docker[2495]: time="2015-05-06T00:22:06Z" level="info" msg="Docker daemon commit=1b09a95-unsupported graphdriver=aufs version=1.11.0-dev"
     May 06 00:22:06 localhost.localdomain docker[2495]: time="2015-05-06T00:22:06Z" level="info" msg="+job acceptconnections()"
     May 06 00:22:06 localhost.localdomain docker[2495]: time="2015-05-06T00:22:06Z" level="info" msg="-job acceptconnections() = OK (0)"
 

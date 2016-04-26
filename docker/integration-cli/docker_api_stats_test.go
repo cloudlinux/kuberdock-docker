@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/docker/docker/pkg/integration/checker"
-	"github.com/docker/docker/pkg/version"
 	"github.com/docker/engine-api/types"
+	"github.com/docker/engine-api/types/versions"
 	"github.com/go-check/check"
 )
 
@@ -27,7 +27,7 @@ func (s *DockerSuite) TestApiStatsNoStreamGetCpu(c *check.C) {
 
 	resp, body, err := sockRequestRaw("GET", fmt.Sprintf("/containers/%s/stats?stream=false", id), nil, "")
 	c.Assert(err, checker.IsNil)
-	c.Assert(resp.ContentLength, checker.GreaterThan, int64(0), check.Commentf("should not use chunked encoding"))
+	c.Assert(resp.StatusCode, checker.Equals, http.StatusOK)
 	c.Assert(resp.Header.Get("Content-Type"), checker.Equals, "application/json")
 
 	var v *types.Stats
@@ -82,14 +82,14 @@ func (s *DockerSuite) TestApiStatsStoppedContainerInGoroutines(c *check.C) {
 func (s *DockerSuite) TestApiStatsNetworkStats(c *check.C) {
 	testRequires(c, SameHostDaemon)
 	testRequires(c, DaemonIsLinux)
-	// Run container for 30 secs
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "top")
+
+	out, _ := runSleepingContainer(c)
 	id := strings.TrimSpace(out)
 	c.Assert(waitRun(id), checker.IsNil)
 
 	// Retrieve the container address
 	contIP := findContainerIP(c, id, "bridge")
-	numPings := 10
+	numPings := 4
 
 	var preRxPackets uint64
 	var preTxPackets uint64
@@ -128,21 +128,20 @@ func (s *DockerSuite) TestApiStatsNetworkStats(c *check.C) {
 func (s *DockerSuite) TestApiStatsNetworkStatsVersioning(c *check.C) {
 	testRequires(c, SameHostDaemon)
 	testRequires(c, DaemonIsLinux)
-	// Run container for 30 secs
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "top")
+
+	out, _ := runSleepingContainer(c)
 	id := strings.TrimSpace(out)
 	c.Assert(waitRun(id), checker.IsNil)
 
 	for i := 17; i <= 21; i++ {
 		apiVersion := fmt.Sprintf("v1.%d", i)
-		for _, statsJSONBlob := range getVersionedStats(c, id, 3, apiVersion) {
-			if version.Version(apiVersion).LessThan("v1.21") {
-				c.Assert(jsonBlobHasLTv121NetworkStats(statsJSONBlob), checker.Equals, true,
-					check.Commentf("Stats JSON blob from API %s %#v does not look like a <v1.21 API stats structure", apiVersion, statsJSONBlob))
-			} else {
-				c.Assert(jsonBlobHasGTE121NetworkStats(statsJSONBlob), checker.Equals, true,
-					check.Commentf("Stats JSON blob from API %s %#v does not look like a >=v1.21 API stats structure", apiVersion, statsJSONBlob))
-			}
+		statsJSONBlob := getVersionedStats(c, id, apiVersion)
+		if versions.LessThan(apiVersion, "v1.21") {
+			c.Assert(jsonBlobHasLTv121NetworkStats(statsJSONBlob), checker.Equals, true,
+				check.Commentf("Stats JSON blob from API %s %#v does not look like a <v1.21 API stats structure", apiVersion, statsJSONBlob))
+		} else {
+			c.Assert(jsonBlobHasGTE121NetworkStats(statsJSONBlob), checker.Equals, true,
+				check.Commentf("Stats JSON blob from API %s %#v does not look like a >=v1.21 API stats structure", apiVersion, statsJSONBlob))
 		}
 	}
 }
@@ -160,23 +159,19 @@ func getNetworkStats(c *check.C, id string) map[string]types.NetworkStats {
 	return st.Networks
 }
 
-// getVersionedNetworkStats returns a slice of numStats stats results for the
-// container with id id using an API call with version apiVersion. Since the
+// getVersionedStats returns stats result for the
+// container with id using an API call with version apiVersion. Since the
 // stats result type differs between API versions, we simply return
-// []map[string]interface{}.
-func getVersionedStats(c *check.C, id string, numStats int, apiVersion string) []map[string]interface{} {
-	stats := make([]map[string]interface{}, numStats)
+// map[string]interface{}.
+func getVersionedStats(c *check.C, id string, apiVersion string) map[string]interface{} {
+	stats := make(map[string]interface{})
 
-	requestPath := fmt.Sprintf("/%s/containers/%s/stats?stream=true", apiVersion, id)
-	_, body, err := sockRequestRaw("GET", requestPath, nil, "")
+	_, body, err := sockRequestRaw("GET", fmt.Sprintf("/%s/containers/%s/stats?stream=false", apiVersion, id), nil, "")
 	c.Assert(err, checker.IsNil)
 	defer body.Close()
 
-	statsDecoder := json.NewDecoder(body)
-	for i := range stats {
-		err = statsDecoder.Decode(&stats[i])
-		c.Assert(err, checker.IsNil, check.Commentf("failed to decode %dth stat: %s", i, err))
-	}
+	err = json.NewDecoder(body).Decode(&stats)
+	c.Assert(err, checker.IsNil, check.Commentf("failed to decode stat: %s", err))
 
 	return stats
 }
@@ -231,4 +226,71 @@ func (s *DockerSuite) TestApiStatsContainerNotFound(c *check.C) {
 	status, _, err = sockRequest("GET", "/containers/nonexistent/stats?stream=0", nil)
 	c.Assert(err, checker.IsNil)
 	c.Assert(status, checker.Equals, http.StatusNotFound)
+}
+
+func (s *DockerSuite) TestApiStatsContainerGetMemoryLimit(c *check.C) {
+	testRequires(c, DaemonIsLinux)
+
+	resp, body, err := sockRequestRaw("GET", "/info", nil, "application/json")
+	c.Assert(err, checker.IsNil)
+	c.Assert(resp.StatusCode, checker.Equals, http.StatusOK)
+	var info types.Info
+	err = json.NewDecoder(body).Decode(&info)
+	c.Assert(err, checker.IsNil)
+	body.Close()
+
+	// don't set a memory limit, the memory limit should be system memory
+	conName := "foo"
+	dockerCmd(c, "run", "-d", "--name", conName, "busybox", "top")
+	c.Assert(waitRun(conName), checker.IsNil)
+
+	resp, body, err = sockRequestRaw("GET", fmt.Sprintf("/containers/%s/stats?stream=false", conName), nil, "")
+	c.Assert(err, checker.IsNil)
+	c.Assert(resp.StatusCode, checker.Equals, http.StatusOK)
+	c.Assert(resp.Header.Get("Content-Type"), checker.Equals, "application/json")
+
+	var v *types.Stats
+	err = json.NewDecoder(body).Decode(&v)
+	c.Assert(err, checker.IsNil)
+	body.Close()
+	c.Assert(fmt.Sprintf("%d", v.MemoryStats.Limit), checker.Equals, fmt.Sprintf("%d", info.MemTotal))
+}
+
+func (s *DockerSuite) TestApiStatsNoStreamConnectedContainers(c *check.C) {
+	testRequires(c, DaemonIsLinux)
+
+	out1, _ := runSleepingContainer(c)
+	id1 := strings.TrimSpace(out1)
+	c.Assert(waitRun(id1), checker.IsNil)
+
+	out2, _ := runSleepingContainer(c, "--net", "container:"+id1)
+	id2 := strings.TrimSpace(out2)
+	c.Assert(waitRun(id2), checker.IsNil)
+
+	ch := make(chan error)
+	go func() {
+		resp, body, err := sockRequestRaw("GET", fmt.Sprintf("/containers/%s/stats?stream=false", id2), nil, "")
+		defer body.Close()
+		if err != nil {
+			ch <- err
+		}
+		if resp.StatusCode != http.StatusOK {
+			ch <- fmt.Errorf("Invalid StatusCode %v", resp.StatusCode)
+		}
+		if resp.Header.Get("Content-Type") != "application/json" {
+			ch <- fmt.Errorf("Invalid 'Content-Type' %v", resp.Header.Get("Content-Type"))
+		}
+		var v *types.Stats
+		if err := json.NewDecoder(body).Decode(&v); err != nil {
+			ch <- err
+		}
+		ch <- nil
+	}()
+
+	select {
+	case err := <-ch:
+		c.Assert(err, checker.IsNil, check.Commentf("Error in stats remote API: %v", err))
+	case <-time.After(15 * time.Second):
+		c.Fatalf("Stats did not return after timeout")
+	}
 }

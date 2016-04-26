@@ -2,11 +2,15 @@ package client
 
 import (
 	"fmt"
+	"sort"
 	"text/tabwriter"
+
+	"golang.org/x/net/context"
 
 	Cli "github.com/docker/docker/cli"
 	"github.com/docker/docker/opts"
 	flag "github.com/docker/docker/pkg/mflag"
+	runconfigopts "github.com/docker/docker/runconfig/opts"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/filters"
 )
@@ -58,7 +62,7 @@ func (cli *DockerCli) CmdVolumeLs(args ...string) error {
 		}
 	}
 
-	volumes, err := cli.client.VolumeList(volFilterArgs)
+	volumes, err := cli.client.VolumeList(context.Background(), volFilterArgs)
 	if err != nil {
 		return err
 	}
@@ -72,6 +76,7 @@ func (cli *DockerCli) CmdVolumeLs(args ...string) error {
 		fmt.Fprintf(w, "\n")
 	}
 
+	sort.Sort(byVolumeName(volumes.Volumes))
 	for _, vol := range volumes.Volumes {
 		if *quiet {
 			fmt.Fprintln(w, vol.Name)
@@ -81,6 +86,14 @@ func (cli *DockerCli) CmdVolumeLs(args ...string) error {
 	}
 	w.Flush()
 	return nil
+}
+
+type byVolumeName []*types.Volume
+
+func (r byVolumeName) Len() int      { return len(r) }
+func (r byVolumeName) Swap(i, j int) { r[i], r[j] = r[j], r[i] }
+func (r byVolumeName) Less(i, j int) bool {
+	return r[i].Name < r[j].Name
 }
 
 // CmdVolumeInspect displays low-level information on one or more volumes.
@@ -98,7 +111,7 @@ func (cli *DockerCli) CmdVolumeInspect(args ...string) error {
 	}
 
 	inspectSearcher := func(name string) (interface{}, []byte, error) {
-		i, err := cli.client.VolumeInspect(name)
+		i, err := cli.client.VolumeInspect(context.Background(), name)
 		return i, nil, err
 	}
 
@@ -116,6 +129,9 @@ func (cli *DockerCli) CmdVolumeCreate(args ...string) error {
 	flDriverOpts := opts.NewMapOpts(nil, nil)
 	cmd.Var(flDriverOpts, []string{"o", "-opt"}, "Set driver specific options")
 
+	flLabels := opts.NewListOpts(nil)
+	cmd.Var(&flLabels, []string{"-label"}, "Set metadata for a volume")
+
 	cmd.Require(flag.Exact, 0)
 	cmd.ParseFlags(args, true)
 
@@ -123,9 +139,10 @@ func (cli *DockerCli) CmdVolumeCreate(args ...string) error {
 		Driver:     *flDriver,
 		DriverOpts: flDriverOpts.GetAll(),
 		Name:       *flName,
+		Labels:     runconfigopts.ConvertKVStringsToMap(flLabels.GetAll()),
 	}
 
-	vol, err := cli.client.VolumeCreate(volReq)
+	vol, err := cli.client.VolumeCreate(context.Background(), volReq)
 	if err != nil {
 		return err
 	}
@@ -145,7 +162,7 @@ func (cli *DockerCli) CmdVolumeRm(args ...string) error {
 	var status = 0
 
 	for _, name := range cmd.Args() {
-		if err := cli.client.VolumeRemove(name); err != nil {
+		if err := cli.client.VolumeRemove(context.Background(), name); err != nil {
 			fmt.Fprintf(cli.err, "%s\n", err)
 			status = 1
 			continue

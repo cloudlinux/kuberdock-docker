@@ -16,44 +16,48 @@ restrict the actions available within the container. The `seccomp()` system
 call operates on the seccomp state of the calling process. You can use this
 feature to restrict your application's access.
 
-This feature is available only if the kernel is configured with `CONFIG_SECCOMP`
-enabled.
+This feature is available only if Docker has been built with seccomp and the
+kernel is configured with `CONFIG_SECCOMP` enabled. To check if your kernel
+supports seccomp:
+
+```bash
+$ cat /boot/config-`uname -r` | grep CONFIG_SECCOMP=
+CONFIG_SECCOMP=y
+```
+
+> **Note**: seccomp profiles require seccomp 2.2.1 and are only
+> available starting with Debian 9 "Stretch", Ubuntu 15.10 "Wily", and
+> Fedora 22. To use this feature on Ubuntu 14.04, Debian Wheezy, or
+> Debian Jessie, you must download the [latest static Docker Linux binary](../installation/binaries.md).
+> This feature is currently *not* available on other distributions.
 
 ## Passing a profile for a container
 
 The default seccomp profile provides a sane default for running containers with
-seccomp. It is moderately protective while providing wide application
-compatibility. The default Docker profile has layout in the following form:
+seccomp and disables around 44 system calls out of 300+. It is moderately protective while providing wide application
+compatibility. The default Docker profile (found [here](https://github.com/docker/docker/blob/master/profiles/seccomp/default.json) has a JSON layout in the following form:
 
-```
+```json
 {
-    "defaultAction": "SCMP_ACT_ALLOW",
-    "syscalls": [
-        {
-            "name": "getcwd",
-            "action": "SCMP_ACT_ERRNO"
-        },
-        {
-            "name": "mount",
-            "action": "SCMP_ACT_ERRNO"
-        },
-        {
-            "name": "setns",
-            "action": "SCMP_ACT_ERRNO"
-        },
-        {
-            "name": "create_module",
-            "action": "SCMP_ACT_ERRNO"
-        },
-        {
-            "name": "chown",
-            "action": "SCMP_ACT_ERRNO"
-        },
-        {
-            "name": "chmod",
-            "action": "SCMP_ACT_ERRNO"
-        }
-    ]
+	"defaultAction": "SCMP_ACT_ERRNO",
+	"architectures": [
+		"SCMP_ARCH_X86_64",
+		"SCMP_ARCH_X86",
+		"SCMP_ARCH_X32"
+	],
+	"syscalls": [
+		{
+			"name": "accept",
+			"action": "SCMP_ACT_ALLOW",
+			"args": []
+		},
+		{
+			"name": "accept4",
+			"action": "SCMP_ACT_ALLOW",
+			"args": []
+		},
+		...
+	]
 }
 ```
 
@@ -62,10 +66,10 @@ it with the `security-opt` option. For example, the following explicitly
 specifies the default policy:
 
 ```
-$ docker run --rm -it --security-opt seccomp:/path/to/seccomp/profile.json hello-world
+$ docker run --rm -it --security-opt seccomp=/path/to/seccomp/profile.json hello-world
 ```
 
-### Syscalls blocked by the default profile
+### Significant syscalls blocked by the default profile
 
 Docker's default seccomp profile is a whitelist which specifies the calls that
 are allowed. The table below lists the significant (but not all) syscalls that
@@ -110,7 +114,6 @@ the reason each syscall is blocked rather than white-listed.
 | `query_module`      | Deny manipulation and functions on kernel modules.                                                            |
 | `quotactl`          | Quota syscall which could let containers disable their own resource limits or process accounting. Also gated by `CAP_SYS_ADMIN`. |
 | `reboot`            | Don't let containers reboot the host. Also gated by `CAP_SYS_BOOT`.                                           |
-| `restart_syscall`   | Don't allow containers to restart a syscall. Possible seccomp bypass see: https://code.google.com/p/chromium/issues/detail?id=408827. |
 | `request_key`       | Prevent containers from using the kernel keyring, which is not namespaced.                                    |
 | `set_mempolicy`     | Syscall that modifies kernel memory and NUMA settings. Already gated by `CAP_SYS_NICE`.                       |
 | `setns`             | Deny associating a thread with a namespace. Also gated by `CAP_SYS_ADMIN`.                                    |
@@ -124,6 +127,7 @@ the reason each syscall is blocked rather than white-listed.
 | `umount2`           | Should be a privileged operation.                                                                             |
 | `unshare`           | Deny cloning new namespaces for processes. Also gated by `CAP_SYS_ADMIN`, with the exception of `unshare --user`. |
 | `uselib`            | Older syscall related to shared libraries, unused for a long time.                                            |
+| `userfaultfd`       | Userspace page fault handling, largely needed for process migration.                                          |
 | `ustat`             | Obsolete syscall.                                                                                             |
 | `vm86`              | In kernel x86 real mode virtual machine. Also gated by `CAP_SYS_ADMIN`.                                       |
 | `vm86old`           | In kernel x86 real mode virtual machine. Also gated by `CAP_SYS_ADMIN`.                                       |
@@ -134,6 +138,6 @@ You can pass `unconfined` to run a container without the default seccomp
 profile.
 
 ```
-$ docker run --rm -it --security-opt seccomp:unconfined debian:jessie \
+$ docker run --rm -it --security-opt seccomp=unconfined debian:jessie \
     unshare --map-root-user --user sh -c whoami
 ```

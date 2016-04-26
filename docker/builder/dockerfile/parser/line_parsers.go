@@ -34,7 +34,7 @@ func parseSubCommand(rest string) (*Node, map[string]bool, error) {
 		return nil, nil, nil
 	}
 
-	_, child, err := parseLine(rest)
+	_, child, err := ParseLine(rest)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -71,7 +71,7 @@ func parseWords(rest string) []string {
 			if unicode.IsSpace(ch) { // skip spaces
 				continue
 			}
-			phase = inWord // found it, fall thru
+			phase = inWord // found it, fall through
 		}
 		if (phase == inWord || phase == inQuote) && (pos == len(rest)) {
 			if blankOK || len(word) > 0 {

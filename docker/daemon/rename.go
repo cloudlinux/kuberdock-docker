@@ -1,10 +1,10 @@
 package daemon
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/Sirupsen/logrus"
-	derr "github.com/docker/docker/errors"
 	"github.com/docker/libnetwork"
 )
 
@@ -18,7 +18,7 @@ func (daemon *Daemon) ContainerRename(oldName, newName string) error {
 	)
 
 	if oldName == "" || newName == "" {
-		return derr.ErrorCodeEmptyRename
+		return fmt.Errorf("Neither old nor new names may be empty")
 	}
 
 	container, err := daemon.GetContainer(oldName)
@@ -31,7 +31,7 @@ func (daemon *Daemon) ContainerRename(oldName, newName string) error {
 	container.Lock()
 	defer container.Unlock()
 	if newName, err = daemon.reserveName(container.ID, newName); err != nil {
-		return derr.ErrorCodeRenameTaken.WithArgs(err)
+		return fmt.Errorf("Error when allocating new name: %v", err)
 	}
 
 	container.Name = newName
@@ -49,8 +49,12 @@ func (daemon *Daemon) ContainerRename(oldName, newName string) error {
 		return err
 	}
 
+	attributes := map[string]string{
+		"oldName": oldName,
+	}
+
 	if !container.Running {
-		daemon.LogContainerEvent(container, "rename")
+		daemon.LogContainerEventWithAttributes(container, "rename", attributes)
 		return nil
 	}
 
@@ -64,15 +68,18 @@ func (daemon *Daemon) ContainerRename(oldName, newName string) error {
 	}()
 
 	sid = container.NetworkSettings.SandboxID
-	sb, err = daemon.netController.SandboxByID(sid)
-	if err != nil {
-		return err
+	if daemon.netController != nil {
+		sb, err = daemon.netController.SandboxByID(sid)
+		if err != nil {
+			return err
+		}
+
+		err = sb.Rename(strings.TrimPrefix(container.Name, "/"))
+		if err != nil {
+			return err
+		}
 	}
 
-	err = sb.Rename(strings.TrimPrefix(container.Name, "/"))
-	if err != nil {
-		return err
-	}
-	daemon.LogContainerEvent(container, "rename")
+	daemon.LogContainerEventWithAttributes(container, "rename", attributes)
 	return nil
 }

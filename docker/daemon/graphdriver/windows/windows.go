@@ -3,26 +3,33 @@
 package windows
 
 import (
+	"bufio"
 	"crypto/sha512"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
+	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
+	"syscall"
 	"time"
+	"unsafe"
 
+	"github.com/Microsoft/go-winio"
+	"github.com/Microsoft/go-winio/archive/tar"
+	"github.com/Microsoft/go-winio/backuptar"
+	"github.com/Microsoft/hcsshim"
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/daemon/graphdriver"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/chrootarchive"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/ioutils"
-	"github.com/docker/docker/pkg/random"
-	"github.com/microsoft/hcsshim"
+	"github.com/docker/docker/pkg/longpath"
+	"github.com/docker/docker/pkg/system"
+	"github.com/vbatts/tar-split/tar/storage"
 )
 
 // init registers the windows graph drivers to the register.
@@ -42,10 +49,12 @@ const (
 type Driver struct {
 	// info stores the shim driver information
 	info hcsshim.DriverInfo
-	// Mutex protects concurrent modification to active
-	sync.Mutex
-	// active stores references to the activated layers
-	active map[string]int
+}
+
+var _ graphdriver.DiffGetterDriver = &Driver{}
+
+func isTP5OrOlder() bool {
+	return system.GetOSVersion().Build <= 14300
 }
 
 // InitFilter returns a new Windows storage filter driver.
@@ -56,7 +65,6 @@ func InitFilter(home string, options []string, uidMaps, gidMaps []idtools.IDMap)
 			HomeDir: home,
 			Flavour: filterDriver,
 		},
-		active: make(map[string]int),
 	}
 	return d, nil
 }
@@ -69,7 +77,6 @@ func InitDiff(home string, options []string, uidMaps, gidMaps []idtools.IDMap) (
 			HomeDir: home,
 			Flavour: diffDriver,
 		},
-		active: make(map[string]int),
 	}
 	return d, nil
 }
@@ -106,8 +113,22 @@ func (d *Driver) Exists(id string) bool {
 	return result
 }
 
-// Create creates a new layer with the given id.
-func (d *Driver) Create(id, parent, mountLabel string) error {
+// CreateReadWrite creates a layer that is writable for use as a container
+// file system.
+func (d *Driver) CreateReadWrite(id, parent, mountLabel string, storageOpt map[string]string) error {
+	return d.create(id, parent, mountLabel, false, storageOpt)
+}
+
+// Create creates a new read-only layer with the given id.
+func (d *Driver) Create(id, parent, mountLabel string, storageOpt map[string]string) error {
+	return d.create(id, parent, mountLabel, true, storageOpt)
+}
+
+func (d *Driver) create(id, parent, mountLabel string, readOnly bool, storageOpt map[string]string) error {
+	if len(storageOpt) != 0 {
+		return fmt.Errorf("--storage-opt is not supported for windows")
+	}
+
 	rPId, err := d.resolveID(parent)
 	if err != nil {
 		return err
@@ -120,27 +141,54 @@ func (d *Driver) Create(id, parent, mountLabel string) error {
 
 	var layerChain []string
 
-	parentIsInit := strings.HasSuffix(rPId, "-init")
-
-	if !parentIsInit && rPId != "" {
+	if rPId != "" {
 		parentPath, err := hcsshim.GetLayerMountPath(d.info, rPId)
 		if err != nil {
 			return err
 		}
-		layerChain = []string{parentPath}
+		if _, err := os.Stat(filepath.Join(parentPath, "Files")); err == nil {
+			// This is a legitimate parent layer (not the empty "-init" layer),
+			// so include it in the layer chain.
+			layerChain = []string{parentPath}
+		}
 	}
 
 	layerChain = append(layerChain, parentChain...)
 
-	if parentIsInit {
-		if len(layerChain) == 0 {
-			return fmt.Errorf("Cannot create a read/write layer without a parent layer.")
-		}
-		if err := hcsshim.CreateSandboxLayer(d.info, id, layerChain[0], layerChain); err != nil {
+	if readOnly {
+		if err := hcsshim.CreateLayer(d.info, id, rPId); err != nil {
 			return err
 		}
 	} else {
-		if err := hcsshim.CreateLayer(d.info, id, rPId); err != nil {
+		var parentPath string
+		if len(layerChain) != 0 {
+			parentPath = layerChain[0]
+		}
+
+		if isTP5OrOlder() {
+			// Pre-create the layer directory, providing an ACL to give the Hyper-V Virtual Machines
+			// group access. This is necessary to ensure that Hyper-V containers can access the
+			// virtual machine data. This is not necessary post-TP5.
+			path, err := syscall.UTF16FromString(filepath.Join(d.info.HomeDir, id))
+			if err != nil {
+				return err
+			}
+			// Give system and administrators full control, and VMs read, write, and execute.
+			// Mark these ACEs as inherited.
+			sd, err := winio.SddlToSecurityDescriptor("D:(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FRFWFX;;;S-1-5-83-0)")
+			if err != nil {
+				return err
+			}
+			err = syscall.CreateDirectory(&path[0], &syscall.SecurityAttributes{
+				Length:             uint32(unsafe.Sizeof(syscall.SecurityAttributes{})),
+				SecurityDescriptor: uintptr(unsafe.Pointer(&sd[0])),
+			})
+			if err != nil {
+				return err
+			}
+		}
+
+		if err := hcsshim.CreateSandboxLayer(d.info, id, parentPath, layerChain); err != nil {
 			return err
 		}
 	}
@@ -182,9 +230,6 @@ func (d *Driver) Get(id, mountLabel string) (string, error) {
 	logrus.Debugf("WindowsGraphDriver Get() id %s mountLabel %s", id, mountLabel)
 	var dir string
 
-	d.Lock()
-	defer d.Unlock()
-
 	rID, err := d.resolveID(id)
 	if err != nil {
 		return "", err
@@ -196,16 +241,14 @@ func (d *Driver) Get(id, mountLabel string) (string, error) {
 		return "", err
 	}
 
-	if d.active[rID] == 0 {
-		if err := hcsshim.ActivateLayer(d.info, rID); err != nil {
-			return "", err
+	if err := hcsshim.ActivateLayer(d.info, rID); err != nil {
+		return "", err
+	}
+	if err := hcsshim.PrepareLayer(d.info, rID, layerChain); err != nil {
+		if err2 := hcsshim.DeactivateLayer(d.info, rID); err2 != nil {
+			logrus.Warnf("Failed to Deactivate %s: %s", id, err)
 		}
-		if err := hcsshim.PrepareLayer(d.info, rID, layerChain); err != nil {
-			if err2 := hcsshim.DeactivateLayer(d.info, rID); err2 != nil {
-				logrus.Warnf("Failed to Deactivate %s: %s", id, err)
-			}
-			return "", err
-		}
+		return "", err
 	}
 
 	mountPath, err := hcsshim.GetLayerMountPath(d.info, rID)
@@ -215,8 +258,6 @@ func (d *Driver) Get(id, mountLabel string) (string, error) {
 		}
 		return "", err
 	}
-
-	d.active[rID]++
 
 	// If the layer has a mount path, use that. Otherwise, use the
 	// folder path.
@@ -238,22 +279,10 @@ func (d *Driver) Put(id string) error {
 		return err
 	}
 
-	d.Lock()
-	defer d.Unlock()
-
-	if d.active[rID] > 1 {
-		d.active[rID]--
-	} else if d.active[rID] == 1 {
-		if err := hcsshim.UnprepareLayer(d.info, rID); err != nil {
-			return err
-		}
-		if err := hcsshim.DeactivateLayer(d.info, rID); err != nil {
-			return err
-		}
-		delete(d.active, rID)
+	if err := hcsshim.UnprepareLayer(d.info, rID); err != nil {
+		return err
 	}
-
-	return nil
+	return hcsshim.DeactivateLayer(d.info, rID)
 }
 
 // Cleanup ensures the information the driver stores is properly removed.
@@ -263,98 +292,133 @@ func (d *Driver) Cleanup() error {
 
 // Diff produces an archive of the changes between the specified
 // layer and its parent layer which may be "".
-func (d *Driver) Diff(id, parent string) (arch archive.Archive, err error) {
+// The layer should be mounted when calling this function
+func (d *Driver) Diff(id, parent string) (_ archive.Archive, err error) {
 	rID, err := d.resolveID(id)
 	if err != nil {
 		return
 	}
 
-	// Getting the layer paths must be done outside of the lock.
 	layerChain, err := d.getLayerChain(rID)
 	if err != nil {
 		return
 	}
 
-	d.Lock()
-
-	// To support export, a layer must be activated but not prepared.
-	if d.info.Flavour == filterDriver {
-		if d.active[rID] == 0 {
-			if err = hcsshim.ActivateLayer(d.info, rID); err != nil {
-				d.Unlock()
-				return
-			}
-			defer func() {
-				if err := hcsshim.DeactivateLayer(d.info, rID); err != nil {
-					logrus.Warnf("Failed to Deactivate %s: %s", rID, err)
-				}
-			}()
-		} else {
-			if err = hcsshim.UnprepareLayer(d.info, rID); err != nil {
-				d.Unlock()
-				return
-			}
-			defer func() {
-				if err := hcsshim.PrepareLayer(d.info, rID, layerChain); err != nil {
-					logrus.Warnf("Failed to re-PrepareLayer %s: %s", rID, err)
-				}
-			}()
-		}
+	// this is assuming that the layer is unmounted
+	if err := hcsshim.UnprepareLayer(d.info, rID); err != nil {
+		return nil, err
 	}
+	defer func() {
+		if err := hcsshim.PrepareLayer(d.info, rID, layerChain); err != nil {
+			logrus.Warnf("Failed to Deactivate %s: %s", rID, err)
+		}
+	}()
 
-	d.Unlock()
-
-	return d.exportLayer(rID, layerChain)
+	arch, err := d.exportLayer(rID, layerChain)
+	if err != nil {
+		return
+	}
+	return ioutils.NewReadCloserWrapper(arch, func() error {
+		return arch.Close()
+	}), nil
 }
 
 // Changes produces a list of changes between the specified layer
 // and its parent layer. If parent is "", then all changes will be ADD changes.
+// The layer should be mounted when calling this function
 func (d *Driver) Changes(id, parent string) ([]archive.Change, error) {
-	return nil, fmt.Errorf("The Windows graphdriver does not support Changes()")
+	rID, err := d.resolveID(id)
+	if err != nil {
+		return nil, err
+	}
+	parentChain, err := d.getLayerChain(rID)
+	if err != nil {
+		return nil, err
+	}
+
+	// this is assuming that the layer is unmounted
+	if err := hcsshim.UnprepareLayer(d.info, rID); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := hcsshim.PrepareLayer(d.info, rID, parentChain); err != nil {
+			logrus.Warnf("Failed to Deactivate %s: %s", rID, err)
+		}
+	}()
+
+	r, err := hcsshim.NewLayerReader(d.info, id, parentChain)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	var changes []archive.Change
+	for {
+		name, _, fileInfo, err := r.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		name = filepath.ToSlash(name)
+		if fileInfo == nil {
+			changes = append(changes, archive.Change{Path: name, Kind: archive.ChangeDelete})
+		} else {
+			// Currently there is no way to tell between an add and a modify.
+			changes = append(changes, archive.Change{Path: name, Kind: archive.ChangeModify})
+		}
+	}
+	return changes, nil
 }
 
 // ApplyDiff extracts the changeset from the given diff into the
 // layer with the specified id and parent, returning the size of the
 // new layer in bytes.
-func (d *Driver) ApplyDiff(id, parent string, diff archive.Reader) (size int64, err error) {
-	rPId, err := d.resolveID(parent)
-	if err != nil {
-		return
-	}
-
+// The layer should not be mounted when calling this function
+func (d *Driver) ApplyDiff(id, parent string, diff archive.Reader) (int64, error) {
 	if d.info.Flavour == diffDriver {
 		start := time.Now().UTC()
 		logrus.Debugf("WindowsGraphDriver ApplyDiff: Start untar layer")
 		destination := d.dir(id)
 		destination = filepath.Dir(destination)
-		if size, err = chrootarchive.ApplyUncompressedLayer(destination, diff, nil); err != nil {
-			return
+		size, err := chrootarchive.ApplyUncompressedLayer(destination, diff, nil)
+		if err != nil {
+			return 0, err
 		}
 		logrus.Debugf("WindowsGraphDriver ApplyDiff: Untar time: %vs", time.Now().UTC().Sub(start).Seconds())
 
-		return
+		return size, nil
 	}
 
-	parentChain, err := d.getLayerChain(rPId)
-	if err != nil {
-		return
+	var layerChain []string
+	if parent != "" {
+		rPId, err := d.resolveID(parent)
+		if err != nil {
+			return 0, err
+		}
+		parentChain, err := d.getLayerChain(rPId)
+		if err != nil {
+			return 0, err
+		}
+		parentPath, err := hcsshim.GetLayerMountPath(d.info, rPId)
+		if err != nil {
+			return 0, err
+		}
+		layerChain = append(layerChain, parentPath)
+		layerChain = append(layerChain, parentChain...)
 	}
-	parentPath, err := hcsshim.GetLayerMountPath(d.info, rPId)
-	if err != nil {
-		return
-	}
-	layerChain := []string{parentPath}
-	layerChain = append(layerChain, parentChain...)
 
-	if size, err = d.importLayer(id, diff, layerChain); err != nil {
-		return
+	size, err := d.importLayer(id, diff, layerChain)
+	if err != nil {
+		return 0, err
 	}
 
 	if err = d.setLayerChain(id, layerChain); err != nil {
-		return
+		return 0, err
 	}
 
-	return
+	return size, nil
 }
 
 // DiffSize calculates the changes between the specified layer
@@ -389,6 +453,8 @@ type CustomImageInfo struct {
 	Path        string
 	Size        int64
 	CreatedTime time.Time
+	OSVersion   string   `json:"-"`
+	OSFeatures  []string `json:"-"`
 }
 
 // GetCustomImageInfos returns the image infos for window specific
@@ -420,7 +486,7 @@ func (d *Driver) GetCustomImageInfos() ([]CustomImageInfo, error) {
 		h := sha512.Sum384([]byte(folderName))
 		id := fmt.Sprintf("%x", h[:32])
 
-		if err := d.Create(id, "", ""); err != nil {
+		if err := d.Create(id, "", "", nil); err != nil {
 			return nil, err
 		}
 		// Create the alternate ID file.
@@ -429,6 +495,21 @@ func (d *Driver) GetCustomImageInfos() ([]CustomImageInfo, error) {
 		}
 
 		imageData.ID = id
+
+		// For now, hard code that all base images except nanoserver depend on win32k support
+		if imageData.Name != "NanoServer" {
+			imageData.OSFeatures = append(imageData.OSFeatures, "win32k")
+		}
+
+		versionData := strings.Split(imageData.Version, ".")
+		if len(versionData) != 4 {
+			logrus.Warn("Could not parse Windows version %s", imageData.Version)
+		} else {
+			// Include just major.minor.build, skip the fourth version field, which does not influence
+			// OS compatibility.
+			imageData.OSVersion = strings.Join(versionData[:3], ".")
+		}
+
 		images = append(images, imageData)
 	}
 
@@ -442,75 +523,179 @@ func (d *Driver) GetMetadata(id string) (map[string]string, error) {
 	return m, nil
 }
 
-// exportLayer generates an archive from a layer based on the given ID.
-func (d *Driver) exportLayer(id string, parentLayerPaths []string) (arch archive.Archive, err error) {
-	layerFolder := d.dir(id)
-
-	tempFolder := layerFolder + "-" + strconv.FormatUint(uint64(random.Rand.Uint32()), 10)
-	if err = os.MkdirAll(tempFolder, 0755); err != nil {
-		logrus.Errorf("Could not create %s %s", tempFolder, err)
-		return
-	}
-	defer func() {
+func writeTarFromLayer(r hcsshim.LayerReader, w io.Writer) error {
+	t := tar.NewWriter(w)
+	for {
+		name, size, fileInfo, err := r.Next()
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
-			_, folderName := filepath.Split(tempFolder)
-			if err2 := hcsshim.DestroyLayer(d.info, folderName); err2 != nil {
-				logrus.Warnf("Couldn't clean-up tempFolder: %s %s", tempFolder, err2)
+			return err
+		}
+		if fileInfo == nil {
+			// Write a whiteout file.
+			hdr := &tar.Header{
+				Name: filepath.ToSlash(filepath.Join(filepath.Dir(name), archive.WhiteoutPrefix+filepath.Base(name))),
+			}
+			err := t.WriteHeader(hdr)
+			if err != nil {
+				return err
+			}
+		} else {
+			err = backuptar.WriteTarFileFromBackupStream(t, r, name, size, fileInfo)
+			if err != nil {
+				return err
 			}
 		}
+	}
+	return t.Close()
+}
+
+// exportLayer generates an archive from a layer based on the given ID.
+func (d *Driver) exportLayer(id string, parentLayerPaths []string) (archive.Archive, error) {
+	var r hcsshim.LayerReader
+	r, err := hcsshim.NewLayerReader(d.info, id, parentLayerPaths)
+	if err != nil {
+		return nil, err
+	}
+
+	archive, w := io.Pipe()
+	go func() {
+		err := writeTarFromLayer(r, w)
+		cerr := r.Close()
+		if err == nil {
+			err = cerr
+		}
+		w.CloseWithError(err)
 	}()
 
-	if err = hcsshim.ExportLayer(d.info, id, tempFolder, parentLayerPaths); err != nil {
-		return
-	}
+	return archive, nil
+}
 
-	archive, err := archive.Tar(tempFolder, archive.Uncompressed)
-	if err != nil {
-		return
-	}
-	return ioutils.NewReadCloserWrapper(archive, func() error {
-		err := archive.Close()
-		d.Put(id)
-		_, folderName := filepath.Split(tempFolder)
-		if err2 := hcsshim.DestroyLayer(d.info, folderName); err2 != nil {
-			logrus.Warnf("Couldn't clean-up tempFolder: %s %s", tempFolder, err2)
+func writeLayerFromTar(r archive.Reader, w hcsshim.LayerWriter) (int64, error) {
+	t := tar.NewReader(r)
+	hdr, err := t.Next()
+	totalSize := int64(0)
+	buf := bufio.NewWriter(nil)
+	for err == nil {
+		base := path.Base(hdr.Name)
+		if strings.HasPrefix(base, archive.WhiteoutPrefix) {
+			name := path.Join(path.Dir(hdr.Name), base[len(archive.WhiteoutPrefix):])
+			err = w.Remove(filepath.FromSlash(name))
+			if err != nil {
+				return 0, err
+			}
+			hdr, err = t.Next()
+		} else if hdr.Typeflag == tar.TypeLink {
+			err = w.AddLink(filepath.FromSlash(hdr.Name), filepath.FromSlash(hdr.Linkname))
+			if err != nil {
+				return 0, err
+			}
+			hdr, err = t.Next()
+		} else {
+			var (
+				name     string
+				size     int64
+				fileInfo *winio.FileBasicInfo
+			)
+			name, size, fileInfo, err = backuptar.FileInfoFromHeader(hdr)
+			if err != nil {
+				return 0, err
+			}
+			err = w.Add(filepath.FromSlash(name), fileInfo)
+			if err != nil {
+				return 0, err
+			}
+			buf.Reset(w)
+
+			// Add the Hyper-V Virutal Machine group ACE to the security descriptor
+			// for TP5 so that Xenons can access all files. This is not necessary
+			// for post-TP5 builds.
+			if isTP5OrOlder() {
+				if sddl, ok := hdr.Winheaders["sd"]; ok {
+					var ace string
+					if hdr.Typeflag == tar.TypeDir {
+						ace = "(A;OICI;0x1200a9;;;S-1-5-83-0)"
+					} else {
+						ace = "(A;;0x1200a9;;;S-1-5-83-0)"
+					}
+					if hdr.Winheaders["sd"], ok = addAceToSddlDacl(sddl, ace); !ok {
+						logrus.Debugf("failed to add VM ACE to %s", sddl)
+					}
+				}
+			}
+
+			hdr, err = backuptar.WriteBackupStreamFromTarFile(buf, t, hdr)
+			ferr := buf.Flush()
+			if ferr != nil {
+				err = ferr
+			}
+			totalSize += size
 		}
-		return err
-	}), nil
+	}
+	if err != io.EOF {
+		return 0, err
+	}
+	return totalSize, nil
+}
 
+func addAceToSddlDacl(sddl, ace string) (string, bool) {
+	daclStart := strings.Index(sddl, "D:")
+	if daclStart < 0 {
+		return sddl, false
+	}
+
+	dacl := sddl[daclStart:]
+	daclEnd := strings.Index(dacl, "S:")
+	if daclEnd < 0 {
+		daclEnd = len(dacl)
+	}
+	dacl = dacl[:daclEnd]
+
+	if strings.Contains(dacl, ace) {
+		return sddl, true
+	}
+
+	i := 2
+	for i+1 < len(dacl) {
+		if dacl[i] != '(' {
+			return sddl, false
+		}
+
+		if dacl[i+1] == 'A' {
+			break
+		}
+
+		i += 2
+		for p := 1; i < len(dacl) && p > 0; i++ {
+			if dacl[i] == '(' {
+				p++
+			} else if dacl[i] == ')' {
+				p--
+			}
+		}
+	}
+
+	return sddl[:daclStart+i] + ace + sddl[daclStart+i:], true
 }
 
 // importLayer adds a new layer to the tag and graph store based on the given data.
 func (d *Driver) importLayer(id string, layerData archive.Reader, parentLayerPaths []string) (size int64, err error) {
-	layerFolder := d.dir(id)
-
-	tempFolder := layerFolder + "-" + strconv.FormatUint(uint64(random.Rand.Uint32()), 10)
-	if err = os.MkdirAll(tempFolder, 0755); err != nil {
-		logrus.Errorf("Could not create %s %s", tempFolder, err)
-		return
-	}
-	defer func() {
-		_, folderName := filepath.Split(tempFolder)
-		if err2 := hcsshim.DestroyLayer(d.info, folderName); err2 != nil {
-			logrus.Warnf("Couldn't clean-up tempFolder: %s %s", tempFolder, err2)
-		}
-	}()
-
-	start := time.Now().UTC()
-	logrus.Debugf("Start untar layer")
-	if size, err = chrootarchive.ApplyLayer(tempFolder, layerData); err != nil {
-		return
-	}
-	err = copySysFiles(tempFolder, filepath.Join(d.info.HomeDir, "sysfile-backups", id))
+	var w hcsshim.LayerWriter
+	w, err = hcsshim.NewLayerWriter(d.info, id, parentLayerPaths)
 	if err != nil {
 		return
 	}
-	logrus.Debugf("Untar time: %vs", time.Now().UTC().Sub(start).Seconds())
-
-	if err = hcsshim.ImportLayer(d.info, id, tempFolder, parentLayerPaths); err != nil {
+	size, err = writeLayerFromTar(layerData, w)
+	if err != nil {
+		w.Close()
 		return
 	}
-
+	err = w.Close()
+	if err != nil {
+		return
+	}
 	return
 }
 
@@ -569,102 +754,52 @@ func (d *Driver) setLayerChain(id string, chain []string) error {
 	return nil
 }
 
-// DiffPath returns a directory that contains files needed to construct layer diff.
-func (d *Driver) DiffPath(id string) (path string, release func() error, err error) {
-	id, err = d.resolveID(id)
-	if err != nil {
-		return
-	}
-
-	// Getting the layer paths must be done outside of the lock.
-	layerChain, err := d.getLayerChain(id)
-	if err != nil {
-		return
-	}
-
-	layerFolder := d.dir(id)
-	tempFolder := layerFolder + "-" + strconv.FormatUint(uint64(random.Rand.Uint32()), 10)
-	if err = os.MkdirAll(tempFolder, 0755); err != nil {
-		logrus.Errorf("Could not create %s %s", tempFolder, err)
-		return
-	}
-
-	defer func() {
-		if err != nil {
-			_, folderName := filepath.Split(tempFolder)
-			if err2 := hcsshim.DestroyLayer(d.info, folderName); err2 != nil {
-				logrus.Warnf("Couldn't clean-up tempFolder: %s %s", tempFolder, err2)
-			}
-		}
-	}()
-
-	if err = hcsshim.ExportLayer(d.info, id, tempFolder, layerChain); err != nil {
-		return
-	}
-
-	err = copySysFiles(filepath.Join(d.info.HomeDir, "sysfile-backups", id), tempFolder)
-	if err != nil {
-		return
-	}
-
-	return tempFolder, func() error {
-		// TODO: activate layers and release here?
-		_, folderName := filepath.Split(tempFolder)
-		return hcsshim.DestroyLayer(d.info, folderName)
-	}, nil
+type fileGetCloserWithBackupPrivileges struct {
+	path string
 }
 
-var sysFileWhiteList = []string{
-	"Hives\\*",
-	"Files\\BOOTNXT",
-	"tombstones.txt",
-}
-
-// note this only handles files
-func copySysFiles(src string, dest string) error {
-	if err := os.MkdirAll(dest, 0700); err != nil {
-		return err
-	}
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		rel, err := filepath.Rel(src, path)
+func (fg *fileGetCloserWithBackupPrivileges) Get(filename string) (io.ReadCloser, error) {
+	var f *os.File
+	// Open the file while holding the Windows backup privilege. This ensures that the
+	// file can be opened even if the caller does not actually have access to it according
+	// to the security descriptor.
+	err := winio.RunWithPrivilege(winio.SeBackupPrivilege, func() error {
+		path := longpath.AddPrefix(filepath.Join(fg.path, filename))
+		p, err := syscall.UTF16FromString(path)
 		if err != nil {
 			return err
 		}
-		for _, sysfile := range sysFileWhiteList {
-			if matches, err := filepath.Match(sysfile, rel); err != nil || !matches {
-				continue
-			}
-
-			fi, err := os.Lstat(path)
-			if err != nil {
-				return err
-			}
-
-			if !fi.Mode().IsRegular() {
-				continue
-			}
-
-			targetPath := filepath.Join(dest, rel)
-			if err = os.MkdirAll(filepath.Dir(targetPath), 0700); err != nil {
-				return err
-			}
-
-			in, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			out, err := os.Create(targetPath)
-			if err != nil {
-				in.Close()
-				return err
-			}
-			_, err = io.Copy(out, in)
-			in.Close()
-			out.Close()
-			if err != nil {
-				return err
-			}
+		h, err := syscall.CreateFile(&p[0], syscall.GENERIC_READ, syscall.FILE_SHARE_READ, nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS, 0)
+		if err != nil {
+			return &os.PathError{Op: "open", Path: path, Err: err}
 		}
+		f = os.NewFile(uintptr(h), path)
 		return nil
 	})
+	return f, err
+}
+
+func (fg *fileGetCloserWithBackupPrivileges) Close() error {
+	return nil
+}
+
+type fileGetDestroyCloser struct {
+	storage.FileGetter
+	path string
+}
+
+func (f *fileGetDestroyCloser) Close() error {
+	// TODO: activate layers and release here?
+	return os.RemoveAll(f.path)
+}
+
+// DiffGetter returns a FileGetCloser that can read files from the directory that
+// contains files for the layer differences. Used for direct access for tar-split.
+func (d *Driver) DiffGetter(id string) (graphdriver.FileGetCloser, error) {
+	id, err := d.resolveID(id)
+	if err != nil {
+		return nil, err
+	}
+
+	return &fileGetCloserWithBackupPrivileges{d.dir(id)}, nil
 }

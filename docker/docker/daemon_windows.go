@@ -1,5 +1,3 @@
-// +build daemon
-
 package main
 
 import (
@@ -8,17 +6,13 @@ import (
 	"syscall"
 
 	"github.com/Sirupsen/logrus"
-	apiserver "github.com/docker/docker/api/server"
 	"github.com/docker/docker/daemon"
+	"github.com/docker/docker/libcontainerd"
 	"github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/system"
 )
 
 var defaultDaemonConfigFile = os.Getenv("programdata") + string(os.PathSeparator) + "docker" + string(os.PathSeparator) + "config" + string(os.PathSeparator) + "daemon.json"
-
-func setPlatformServerConfig(serverConfig *apiserver.Config, daemonCfg *daemon.Config) *apiserver.Config {
-	return serverConfig
-}
 
 // currentUserIsOwner checks whether the current user is the owner of the given
 // file.
@@ -56,4 +50,19 @@ func setupConfigReloadTrap(configFile string, flags *mflag.FlagSet, reload func(
 			}
 		}
 	}()
+}
+
+func (cli *DaemonCli) getPlatformRemoteOptions() []libcontainerd.RemoteOption {
+	return nil
+}
+
+// getLibcontainerdRoot gets the root directory for libcontainerd to store its
+// state. The Windows libcontainerd implementation does not need to write a spec
+// or state to disk, so this is a no-op.
+func (cli *DaemonCli) getLibcontainerdRoot() string {
+	return ""
+}
+
+func allocateDaemonPort(addr string) error {
+	return nil
 }

@@ -26,6 +26,7 @@
 	# the release process is clear and up-to-date.
 
 		people = [
+			"aaronlehmann",
 			"calavera",
 			"coolljt0725",
 			"cpuguy83",
@@ -33,15 +34,15 @@
 			"duglin",
 			"estesp",
 			"icecrime",
-			"jfrazelle",
+			"jhowardmsft",
 			"lk4d4",
+			"mavenugo",
 			"mhbauer",
 			"runcom",
 			"tianon",
 			"tibor",
 			"tonistiigi",
 			"unclejack",
-			"vbatts",
 			"vdemeester"
 		]
 
@@ -69,6 +70,7 @@
 	# - close an issue or pull request when it's inappropriate or off-topic
 
 		people = [
+			"programmerq",
 			"thajeztah"
 		]
 
@@ -79,13 +81,27 @@
 	# Thank you!
 
 		people = [
-			# As a maintainer, Erik was responsible for the "builder", and 
+			# As a maintainer, Erik was responsible for the "builder", and
 			# started the first designs for the new networking model in
 			# Docker. Erik is now working on all kinds of plugins for Docker
 			# (https://github.com/contiv) and various open source projects
 			# in his own repository https://github.com/erikh. You may
 			# still stumble into him in our issue tracker, or on IRC.
 			"erikh",
+
+			# Vincent "vbatts!" Batts made his first contribution to the project
+			# in November 2013, to become a maintainer a few months later, on 
+			# May 10, 2014 (https://github.com/docker/docker/commit/d6e666a87a01a5634c250358a94c814bf26cb778).
+			# As a maintainer, Vincent made important contributions to core elements
+			# of Docker, such as "distribution" (tarsum) and graphdrivers (btrfs, devicemapper).
+			# He also contributed the "tar-split" library, an important element
+			# for the content-addressable store.
+			# Vincent is currently a member of the Open Containers Initiative
+			# Technical Oversight Board (TOB), besides his work at Red Hat and
+			# Project Atomic. You can still find him regularly hanging out in
+			# our repository and the #docker-dev and #docker-maintainers IRC channels
+			# for a chat, as he's always a lot of fun.
+			"vbatts",
 
 			# Victor is one of the earliest contributors to Docker, having worked on the
 			# project when it was still "dotCloud" in April 2013. He's been responsible
@@ -110,6 +126,11 @@
 # in the people section.
 
 	# ADD YOURSELF HERE IN ALPHABETICAL ORDER
+
+	[people.aaronlehmann]
+	Name = "Aaron Lehmann"
+	Email = "aaron.lehmann@docker.com"
+	GitHub = "aaronlehmann"
 
 	[people.calavera]
 	Name = "David Calavera"
@@ -156,15 +177,25 @@
 	Email = "james@lovedthanlost.net"
 	GitHub = "jamtur01"
 
+	[people.jhowardmsft]
+	Name = "John Howard"
+	Email = "jhoward@microsoft.com"
+	GitHub = "jhowardmsft"
+
 	[people.jfrazelle]
 	Name = "Jessie Frazelle"
-	Email = "j@docker.com"
+	Email = "jess@linux.com"
 	GitHub = "jfrazelle"
 
 	[people.lk4d4]
 	Name = "Alexander Morozov"
 	Email = "lk4d4@docker.com"
 	GitHub = "lk4d4"
+
+	[people.mavenugo]
+	Name = "Madhu Venugopal"
+	Email = "madhu@docker.com"
+	GitHub = "mavenugo"
 
 	[people.mhbauer]
 	Name = "Morgan Bauer"
@@ -175,6 +206,11 @@
 	Name = "Mary Anthony"
 	Email = "mary.anthony@docker.com"
 	GitHub = "moxiegirl"
+
+	[people.programmerq]
+	Name = "Jeff Anderson"
+	Email = "jeff@docker.com"
+	GitHub = "programmerq"
 
 	[people.runcom]
 	Name = "Antonio Murdaca"
@@ -195,11 +231,6 @@
 	Name = "Sebastiaan van Stijn"
 	Email = "github@gone.nl"
 	GitHub = "thaJeztah"
-
-	[people.theadactyl]
-	Name = "Thea Lamkin"
-	Email = "thea@docker.com"
-	GitHub = "theadactyl"
 
 	[people.tianon]
 	Name = "Tianon Gravi"

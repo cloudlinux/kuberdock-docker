@@ -63,6 +63,9 @@ func (d *driver) CreateNetwork(id string, option map[string]interface{}, ipV4Dat
 	if id == "" {
 		return fmt.Errorf("invalid network id")
 	}
+	if len(ipV4Data) == 0 || ipV4Data[0].Pool.String() == "0.0.0.0/0" {
+		return types.BadRequestErrorf("ipv4 pool is empty")
+	}
 
 	// Since we perform lazy configuration make sure we try
 	// configuring the driver when we enter CreateNetwork
@@ -101,6 +104,11 @@ func (d *driver) DeleteNetwork(nid string) error {
 		return fmt.Errorf("invalid network id")
 	}
 
+	// Make sure driver resources are initialized before proceeding
+	if err := d.configure(); err != nil {
+		return err
+	}
+
 	n := d.network(nid)
 	if n == nil {
 		return fmt.Errorf("could not find network with id %s", nid)
@@ -109,6 +117,14 @@ func (d *driver) DeleteNetwork(nid string) error {
 	d.deleteNetwork(nid)
 
 	return n.releaseVxlanID()
+}
+
+func (d *driver) ProgramExternalConnectivity(nid, eid string, options map[string]interface{}) error {
+	return nil
+}
+
+func (d *driver) RevokeExternalConnectivity(nid, eid string) error {
+	return nil
 }
 
 func (n *network) incEndpointCount() {
@@ -138,9 +154,9 @@ func (n *network) joinSubnetSandbox(s *subnet) error {
 
 func (n *network) leaveSandbox() {
 	n.Lock()
+	defer n.Unlock()
 	n.joinCnt--
 	if n.joinCnt != 0 {
-		n.Unlock()
 		return
 	}
 
@@ -151,15 +167,14 @@ func (n *network) leaveSandbox() {
 	for _, s := range n.subnets {
 		s.once = &sync.Once{}
 	}
-	n.Unlock()
 
 	n.destroySandbox()
 }
 
+// to be called while holding network lock
 func (n *network) destroySandbox() {
-	sbox := n.sandbox()
-	if sbox != nil {
-		for _, iface := range sbox.Info().Interfaces() {
+	if n.sbox != nil {
+		for _, iface := range n.sbox.Info().Interfaces() {
 			if err := iface.Remove(); err != nil {
 				logrus.Debugf("Remove interface %s failed: %v", iface.SrcName(), err)
 			}
@@ -186,8 +201,8 @@ func (n *network) destroySandbox() {
 			}
 		}
 
-		sbox.Destroy()
-		n.setSandbox(nil)
+		n.sbox.Destroy()
+		n.sbox = nil
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"golang.org/x/net/context"
+
 	Cli "github.com/docker/docker/cli"
 	flag "github.com/docker/docker/pkg/mflag"
 )
@@ -19,8 +21,8 @@ func (cli *DockerCli) CmdUnpause(args ...string) error {
 
 	var errs []string
 	for _, name := range cmd.Args() {
-		if err := cli.client.ContainerUnpause(name); err != nil {
-			errs = append(errs, fmt.Sprintf("Failed to unpause container (%s): %s", name, err))
+		if err := cli.client.ContainerUnpause(context.Background(), name); err != nil {
+			errs = append(errs, err.Error())
 		} else {
 			fmt.Fprintf(cli.out, "%s\n", name)
 		}

@@ -6,6 +6,7 @@ set -e
 	export TZ=UTC # make sure our "date" variables are UTC-based
 
 	source "$(dirname "$BASH_SOURCE")/.integration-daemon-start"
+	source "$(dirname "$BASH_SOURCE")/.detect-daemon-osarch"
 
 	# TODO consider using frozen images for the dockercore/builder-rpm tags
 
@@ -59,16 +60,21 @@ set -e
 	while read -r line || [[ -n "$line" ]]; do
 		if [ -z "$line" ]; then continue; fi
 		if [[ "$line" =~ $VERSION_REGEX ]]; then
-			echo >> contrib/builder/rpm/changelog
-			echo "* `date -d ${BASH_REMATCH[2]} '+%a %b %d %Y'` ${rpmPackager} - ${BASH_REMATCH[1]}" >> contrib/builder/rpm/changelog
+			echo >> contrib/builder/rpm/${PACKAGE_ARCH}/changelog
+			echo "* `date -d ${BASH_REMATCH[2]} '+%a %b %d %Y'` ${rpmPackager} - ${BASH_REMATCH[1]}" >> contrib/builder/rpm/${PACKAGE_ARCH}/changelog
 		fi
 		if [[ "$line" =~ $ENTRY_REGEX ]]; then
-			echo "- ${BASH_REMATCH[1]//\`}" >> contrib/builder/rpm/changelog
+			echo "- ${BASH_REMATCH[1]//\`}" >> contrib/builder/rpm/${PACKAGE_ARCH}/changelog
 		fi
 	done < CHANGELOG.md
 
-	# TODO add a configurable knob for _which_ rpms to build so we don't have to modify the file or build all of them every time we need to test
-	for dir in contrib/builder/rpm/*/; do
+	builderDir="contrib/builder/rpm/${PACKAGE_ARCH}"
+	pkgs=( $(find "${builderDir}/"*/ -type d) )
+	if [ ! -z "$DOCKER_BUILD_PKGS" ]; then
+		pkgs=( $(echo ${DOCKER_BUILD_PKGS[@]/#/$builderDir\/}) )
+	fi
+	for dir in "${pkgs[@]}"; do
+		[ -d "$dir" ] || { echo >&2 "skipping nonexistent $dir"; continue; }
 		version="$(basename "$dir")"
 		suite="${version##*-}"
 
@@ -81,6 +87,26 @@ set -e
 		cat > "$DEST/$version/Dockerfile.build" <<-EOF
 			FROM $image
 			COPY . /usr/src/${rpmName}
+			RUN mkdir -p /go/src/github.com/docker && mkdir -p /go/src/github.com/opencontainers
+		EOF
+
+		# get the RUNC and CONTAINERD commit from the root Dockerfile, this keeps the commits in sync
+		awk '$1 == "ENV" && $2 == "RUNC_COMMIT" { print; exit }' Dockerfile >> "$DEST/$version/Dockerfile.build"
+		awk '$1 == "ENV" && $2 == "CONTAINERD_COMMIT" { print; exit }' Dockerfile >> "$DEST/$version/Dockerfile.build"
+
+		# add runc and containerd compile and install
+		cat >> "$DEST/$version/Dockerfile.build" <<-EOF
+			# Install runc
+			RUN git clone https://github.com/opencontainers/runc.git "/go/src/github.com/opencontainers/runc" \
+					&& cd "/go/src/github.com/opencontainers/runc" \
+					&& git checkout -q "\$RUNC_COMMIT"
+			RUN set -x && export GOPATH="/go" && cd "/go/src/github.com/opencontainers/runc" \
+					&& make BUILDTAGS="\$RUNC_BUILDTAGS" && make install
+			# Install containerd
+			RUN git clone https://github.com/docker/containerd.git "/go/src/github.com/docker/containerd" \
+					&& cd "/go/src/github.com/docker/containerd" \
+					&& git checkout -q "\$CONTAINERD_COMMIT"
+			RUN set -x && export GOPATH="/go" && cd "/go/src/github.com/docker/containerd" && make && make install
 		EOF
 		if [ "$DOCKER_EXPERIMENTAL" ]; then
 			echo 'ENV DOCKER_EXPERIMENTAL 1' >> "$DEST/$version/Dockerfile.build"
@@ -91,8 +117,11 @@ set -e
 			WORKDIR /root/rpmbuild
 			RUN ln -sfv /usr/src/${rpmName}/hack/make/.build-rpm SPECS
 			WORKDIR /root/rpmbuild/SPECS
-			RUN tar -cz -C /usr/src -f /root/rpmbuild/SOURCES/${rpmName}.tar.gz ${rpmName}
-			RUN { cat /usr/src/${rpmName}/contrib/builder/rpm/changelog; } >> ${rpmName}.spec && tail >&2 ${rpmName}.spec
+			RUN tar -r -C /usr/src -f /root/rpmbuild/SOURCES/${rpmName}.tar ${rpmName}
+			RUN tar -r -C /go/src/github.com/docker -f /root/rpmbuild/SOURCES/${rpmName}.tar containerd
+			RUN tar -r -C /go/src/github.com/opencontainers -f /root/rpmbuild/SOURCES/${rpmName}.tar runc
+			RUN gzip /root/rpmbuild/SOURCES/${rpmName}.tar
+			RUN { cat /usr/src/${rpmName}/contrib/builder/rpm/${PACKAGE_ARCH}/changelog; } >> ${rpmName}.spec && tail >&2 ${rpmName}.spec
 			RUN rpmbuild -ba \
 				--define '_gitcommit $DOCKER_GITCOMMIT' \
 				--define '_release $rpmRelease' \
