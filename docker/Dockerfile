@@ -23,6 +23,7 @@
 # the case. Therefore, you don't have to disable it anymore.
 #
 
+# Cut for distribution specific
 FROM ubuntu:trusty
 
 # add zfs ppa
@@ -50,6 +51,7 @@ RUN apt-get update && apt-get install -y \
 	iptables \
 	jq \
 	libapparmor-dev \
+	libaudit-dev \
 	libcap-dev \
 	libltdl-dev \
 	libsqlite3-dev \
@@ -67,8 +69,17 @@ RUN apt-get update && apt-get install -y \
 	libzfs-dev \
 	tar \
 	--no-install-recommends \
-	&& ln -snf /usr/bin/clang-3.8 /usr/local/bin/clang \
-	&& ln -snf /usr/bin/clang++-3.8 /usr/local/bin/clang++
+# End dependencies cut
+	automake \
+	git \
+	jq \
+	iptables \
+	libtool \
+	mercurial \
+	parallel \
+	python-devel \
+	python-mock \
+	python-pip
 
 # Get lvm2 source for compiling statically
 ENV LVM2_VERSION 2.02.103
@@ -168,7 +179,7 @@ RUN set -x \
 	&& rm -rf "$GOPATH"
 
 # Install notary server
-ENV NOTARY_VERSION docker-v1.10.2-1
+ENV NOTARY_VERSION v0.2.0
 RUN set -x \
 	&& export GOPATH="$(mktemp -d)" \
 	&& git clone https://github.com/docker/notary.git "$GOPATH/src/github.com/docker/notary" \
@@ -202,7 +213,9 @@ RUN useradd --create-home --gid docker unprivilegeduser
 
 VOLUME /var/lib/docker
 WORKDIR /go/src/github.com/docker/docker
+#  Cut for buildtags distribution specific
 ENV DOCKER_BUILDTAGS apparmor seccomp selinux
+# End buildtags cut
 
 # Let us use a .bashrc file
 RUN ln -sfv $PWD/.bashrc ~/.bashrc

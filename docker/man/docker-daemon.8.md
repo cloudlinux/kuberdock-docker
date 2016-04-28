@@ -6,10 +6,12 @@ docker-daemon - Enable daemon mode
 
 # SYNOPSIS
 **docker daemon**
+[**--add-registry**[=*[]*]]
 [**--api-cors-header**=[=*API-CORS-HEADER*]]
 [**--authorization-plugin**[=*[]*]]
 [**-b**|**--bridge**[=*BRIDGE*]]
 [**--bip**[=*BIP*]]
+[**--block-registry**[=*[]*]]
 [**--cgroup-parent**[=*[]*]]
 [**--cluster-store**[=*[]*]]
 [**--cluster-advertise**[=*[]*]]
@@ -71,6 +73,9 @@ format.
 
 # OPTIONS
 
+**--add-registry**=[]
+  **EXPERIMENTAL** Each given registry will be queried before a public Docker registry during image pulls or searches. They will be searched in the order given. Registry mirrors won't apply to them.
+
 **--api-cors-header**=""
   Set CORS headers in the remote API. Default is cors disabled. Give urls like "http://foo, http://bar, ...". Give "*" to allow all.
 
@@ -82,6 +87,9 @@ format.
 
 **--bip**=""
   Use the provided CIDR notation address for the dynamically created bridge (docker0); Mutually exclusive of \-b
+
+**--block-registry**=[]
+  **EXPERIMENTAL** Prevent Docker daemon from contacting specified registries. There are two special keywords recognized. The first is "public" and represents public Docker registry. The second is "all" which causes all registries but those added with **--add-registry** flag to be blocked.
 
 **--cgroup-parent**=""
   Set parent cgroup for all containers. Default is "/docker" for fs cgroup driver and "system.slice" for systemd cgroup driver.
@@ -457,6 +465,30 @@ this topic, see
 [docker#4036](https://github.com/docker/docker/issues/4036).
 Otherwise, set this flag for migrating existing Docker daemons to a
 daemon with a supported environment.
+
+#### dm.min_free_space
+
+Specifies the min free space percent in thin pool require for new device
+creation to succeed. This check applies to both free data space as well
+as free metadata space. Valid values are from 0% - 99%. Value 0% disables
+free space checking logic. If user does not specify a value for this optoin,
+then default value for this option is 10%.
+
+Whenever a new thin pool device is created (during docker pull or
+during container creation), docker will check minimum free space is
+available as specified by this parameter. If that is not the case, then
+device creation will fail and docker operation will fail.
+
+One will have to create more free space in thin pool to recover from the
+error. Either delete some of the images and containers from thin pool and
+create free space or add more storage to thin pool.
+
+For lvm thin pool, one can add more storage to volume group container thin
+pool and that should automatically resolve it. If loop devices are being
+used, then stop docker, grow the size of loop files and restart docker and
+that should resolve the issue.
+
+Example use: `docker daemon --storage-opt dm.min_free_space_percent=10%`
 
 # CLUSTER STORE OPTIONS
 

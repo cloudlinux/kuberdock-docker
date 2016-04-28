@@ -790,7 +790,7 @@ func (s *DockerSuite) TestRunEnvironmentErase(c *check.C) {
 	// the container
 
 	cmd := exec.Command(dockerBinary, "run", "-e", "FOO", "-e", "HOSTNAME", "busybox", "env")
-	cmd.Env = appendBaseEnv([]string{})
+	cmd.Env = appendBaseEnv(true)
 
 	out, _, err := runCommandWithOutput(cmd)
 	if err != nil {
@@ -824,7 +824,7 @@ func (s *DockerSuite) TestRunEnvironmentOverride(c *check.C) {
 	// already in the env that we're overriding them
 
 	cmd := exec.Command(dockerBinary, "run", "-e", "HOSTNAME", "-e", "HOME=/root2", "busybox", "env")
-	cmd.Env = appendBaseEnv([]string{"HOSTNAME=bar"})
+	cmd.Env = appendBaseEnv(true, "HOSTNAME=bar")
 
 	out, _, err := runCommandWithOutput(cmd)
 	if err != nil {
@@ -2518,6 +2518,8 @@ func (s *DockerSuite) TestRunModeUTSHost(c *check.C) {
 }
 
 func (s *DockerSuite) TestRunTLSverify(c *check.C) {
+	// Remote daemons use TLS and this test is not applicable when TLS is required.
+	testRequires(c, SameHostDaemon)
 	if out, code, err := dockerCmdWithError("ps"); err != nil || code != 0 {
 		c.Fatalf("Should have worked: %v:\n%v", err, out)
 	}
@@ -3259,7 +3261,7 @@ func (s *DockerTrustSuite) TestTrustedRunFromBadTrustServer(c *check.C) {
 	// Windows does not support this functionality
 	testRequires(c, DaemonIsLinux)
 	repoName := fmt.Sprintf("%v/dockerclievilrun/trusted:latest", privateRegistryURL)
-	evilLocalConfigDir, err := ioutil.TempDir("", "evil-local-config-dir")
+	evilLocalConfigDir, err := ioutil.TempDir("", "evilrun-local-config-dir")
 	if err != nil {
 		c.Fatalf("Failed to create local temp dir")
 	}
@@ -3315,15 +3317,15 @@ func (s *DockerTrustSuite) TestTrustedRunFromBadTrustServer(c *check.C) {
 		c.Fatalf("Missing expected output on trusted push:\n%s", out)
 	}
 
-	// Now, try running with the original client from this new trust server. This should fail.
+	// Now, try running with the original client from this new trust server. This should fallback to our cached timestamp and metadata.
 	runCmd = exec.Command(dockerBinary, "run", repoName)
 	s.trustedCmd(runCmd)
 	out, _, err = runCommandWithOutput(runCmd)
-	if err == nil {
-		c.Fatalf("Expected to fail on this run due to different remote data: %s\n%s", err, out)
-	}
 
-	if !strings.Contains(string(out), "valid signatures did not meet threshold") {
+	if err != nil {
+		c.Fatalf("Error falling back to cached trust data: %s\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Error while downloading remote metadata, using cached timestamp") {
 		c.Fatalf("Missing expected output on trusted push:\n%s", out)
 	}
 }
@@ -4194,4 +4196,74 @@ func (s *DockerSuite) TestRunNamedVolumesFromNotRemoved(c *check.C) {
 	dockerCmd(c, "volume", "inspect", "test")
 	out, _ := dockerCmd(c, "volume", "ls", "-q")
 	c.Assert(strings.TrimSpace(out), checker.Equals, "test")
+}
+
+func (s *DockerRegistrySuite) TestRunWithAdditionalRegistry(c *check.C) {
+	if err := s.d.StartWithBusybox("--add-registry=" + s.reg.url); err != nil {
+		c.Fatalf("we should have been able to start the daemon with passing add-registry=%s: %v", s.reg.url, err)
+	}
+
+	bbImg := s.d.getAndTestImageEntry(c, 1, "busybox", "")
+
+	// push busybox to additional registry as "library/hello-world" and remove all local images
+	if out, err := s.d.Cmd("tag", "busybox", s.reg.url+"/busybox"); err != nil {
+		c.Fatalf("failed to tag image busybox: error %v, output %q", err, out)
+	}
+	if out, err := s.d.Cmd("rmi", "busybox"); err != nil {
+		c.Fatalf("failed to remove image busybox: %v, output: %s", err, out)
+	}
+	s.d.getAndTestImageEntry(c, 1, s.reg.url+"/busybox", bbImg.id)
+
+	// try to run fully qualified image
+	if out, err := s.d.Cmd("run", "-t", s.reg.url+"/busybox", "sh", "-c", "echo foo"); err != nil {
+		c.Fatalf("failed to run %s/busybox image: %v, output: %s", s.reg.url, err, out)
+	} else if strings.TrimSpace(out) != "foo" {
+		c.Fatalf("got unexpected output: %q", out)
+	}
+
+	// try to run unqualified
+	if out, err := s.d.Cmd("run", "-t", "busybox", "sh", "-c", "echo foo"); err != nil {
+		c.Fatalf("failed to run busybox image: %v, output: %s", err, out)
+	} else if out != "foo\r\n" {
+		c.Fatalf("got unexpected output: %q", out)
+	}
+
+	// try to run hello world from additional registry
+	if out, err := s.d.Cmd("run", "-t", s.reg.url+"/library/hello-world", "sh", "-c", "echo foo"); err == nil {
+		c.Fatalf("running container from image %s/library/hello-world should have failed; output: %s", s.reg.url, out)
+	}
+
+	// try to run hello-world from official registry
+	if out, err := s.d.Cmd("run", "-t", "library/hello-world"); err != nil {
+		c.Fatalf("failed to run library/hello-world image: %v, output: %s", err, out)
+	} else if strings.HasSuffix(strings.TrimSpace(out), "foo") {
+		c.Fatalf("got unexpected output")
+	}
+	s.d.getAndTestImageEntry(c, 2, "docker.io/hello-world", "")
+
+	// push busybox to additional registry as "library/hello-world" and remove all local images
+	if out, err := s.d.Cmd("tag", s.reg.url+"/busybox", s.reg.url+"/library/hello-world"); err != nil {
+		c.Fatalf("failed to tag image %s: error %v, output %q", s.reg.url+"/busybox", err, out)
+	}
+	if out, err := s.d.Cmd("push", s.reg.url+"/library/hello-world"); err != nil {
+		c.Fatalf("failed to push image %s: error %v, output %q", s.reg.url+"/library/hello-world", err, out)
+	}
+	args := []string{"-f", "hello-world", "library/hello-world", "busybox"}
+	if out, err := s.d.Cmd("rmi", args...); err != nil {
+		c.Fatalf("failed to remove images %v: %v, output: %s", args[1:], err, out)
+	}
+	s.d.getAndTestImageEntry(c, 0, "", "")
+
+	// now try to run unqualified hello-world again - this time we should pull from additional registry
+	if out, err := s.d.Cmd("run", "-t", "library/hello-world", "sh", "-c", "echo foo"); err != nil {
+		c.Fatalf("failed to run library/hello-world image: %v, output: %s", err, out)
+	} else if !strings.HasSuffix(strings.TrimSpace(out), "\nfoo") {
+		c.Fatalf("got unexpected output: %q", out)
+	}
+	// image id now differs from busybox because ids are generated again upon full pull
+	hwImg := s.d.getAndTestImageEntry(c, 1, s.reg.url+"/library/hello-world", "")
+	// therefore we need to compare size
+	if bbImg.size != hwImg.size {
+		c.Fatalf("expected %s:%s and %s:%s to have equal size (%s != %s)", hwImg.name, hwImg.tag, bbImg.name, bbImg.tag, hwImg.size, bbImg.size)
+	}
 }

@@ -41,6 +41,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*container.Config, *container.Host
 		flDevices           = opts.NewListOpts(ValidateDevice)
 
 		flUlimits = NewUlimitOpt(nil)
+		flSysctls = opts.NewMapOpts(nil, opts.ValidateSysctl)
 
 		flPublish           = opts.NewListOpts(nil)
 		flExpose            = opts.NewListOpts(nil)
@@ -122,6 +123,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*container.Config, *container.Host
 	cmd.Var(&flGroupAdd, []string{"-group-add"}, "Add additional groups to join")
 	cmd.Var(&flSecurityOpt, []string{"-security-opt"}, "Security Options")
 	cmd.Var(flUlimits, []string{"-ulimit"}, "Ulimit options")
+	cmd.Var(flSysctls, []string{"-sysctl"}, "Sysctl options")
 	cmd.Var(&flLoggingOpts, []string{"-log-opt"}, "Log driver options")
 
 	cmd.Require(flag.Min, 1)
@@ -205,7 +207,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*container.Config, *container.Host
 	var binds []string
 	// add any bind targets to the list of container volumes
 	for bind := range flVolumes.GetMap() {
-		if arr := volumeSplitN(bind, 2); len(arr) > 1 {
+		if arr := VolumeSplitN(bind, 2); len(arr) > 1 {
 			// after creating the bind mount we want to delete it from the flVolumes values because
 			// we do not want bind mounts being committed to image configs
 			binds = append(binds, bind)
@@ -375,7 +377,10 @@ func Parse(cmd *flag.FlagSet, args []string) (*container.Config, *container.Host
 		Entrypoint:      entrypoint,
 		WorkingDir:      *flWorkingDir,
 		Labels:          ConvertKVStringsToMap(labels),
-		StopSignal:      *flStopSignal,
+	}
+
+	if cmd.IsSet("-stop-signal") {
+		config.StopSignal = *flStopSignal
 	}
 
 	hostConfig := &container.HostConfig{
@@ -412,6 +417,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*container.Config, *container.Host
 		ShmSize:        shmSize,
 		Resources:      resources,
 		Tmpfs:          tmpfs,
+		Sysctls:        flSysctls.GetAll(),
 	}
 
 	// When allocating stdin in attached mode, close stdin at client disconnect
@@ -690,10 +696,10 @@ func validatePath(val string, validator func(string) bool) (string, error) {
 	return val, nil
 }
 
-// SplitN splits raw into a maximum of n parts, separated by a separator colon.
+// VolumeSplitN splits raw into a maximum of n parts, separated by a separator colon.
 // A separator colon is the last `:` character in the regex `[/:\\]?[a-zA-Z]:` (note `\\` is `\` escaped).
 // This allows to correctly split strings such as `C:\foo:D:\:rw`.
-func volumeSplitN(raw string, n int) []string {
+func VolumeSplitN(raw string, n int) []string {
 	var array []string
 	if len(raw) == 0 || raw[0] == ':' {
 		// invalid
