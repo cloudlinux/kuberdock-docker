@@ -740,9 +740,11 @@ _docker_daemon() {
 	"
 	local options_with_args="
 		$global_options_with_args
+		--add-registry
 		--api-cors-header
 		--authorization-plugin
 		--bip
+		--block-registry
 		--bridge -b
 		--cgroup-parent
 		--cluster-advertise
@@ -1606,6 +1608,7 @@ _docker_run() {
 		--shm-size
 		--stop-signal
 		--tmpfs
+		--sysctl
 		--ulimit
 		--user -u
 		--uts

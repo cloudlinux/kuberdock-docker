@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
-	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -88,12 +88,13 @@ func (s *DockerSuite) TestApiDockerApiVersion(c *check.C) {
 
 	// Test using the env var first
 	cmd := exec.Command(dockerBinary, "-H="+server.URL[7:], "version")
-	cmd.Env = append([]string{"DOCKER_API_VERSION=xxx"}, os.Environ()...)
+	cmd.Env = appendBaseEnv(false, "DOCKER_API_VERSION=xxx")
 	out, _, _ := runCommandWithOutput(cmd)
 
 	c.Assert(svrVersion, check.Equals, "/vxxx/version")
 
-	if !strings.Contains(out, "API version:  xxx") {
+	versionre := regexp.MustCompile(`API version:[\s]*xxx`)
+	if !versionre.MatchString(out) {
 		c.Fatalf("Out didn't have 'xxx' for the API version, had:\n%s", out)
 	}
 }
