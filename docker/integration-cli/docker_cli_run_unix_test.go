@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -703,6 +704,14 @@ func (s *DockerSuite) TestRunWithShmSize(c *check.C) {
 	c.Assert(shmSize, check.Equals, "1073741824")
 }
 
+func (s *DockerSuite) TestRunTmpfsMountsEnsureOrdered(c *check.C) {
+	tmpFile, err := ioutil.TempFile("", "test")
+	c.Assert(err, check.IsNil)
+	defer tmpFile.Close()
+	out, _ := dockerCmd(c, "run", "--tmpfs", "/run", "-v", tmpFile.Name()+":/run/test", "busybox", "ls", "/run")
+	c.Assert(out, checker.Contains, "test")
+}
+
 func (s *DockerSuite) TestRunTmpfsMounts(c *check.C) {
 	// TODO Windows (Post TP4): This test cannot run on a Windows daemon as
 	// Windows does not support tmpfs mounts.
@@ -726,7 +735,7 @@ func (s *DockerSuite) TestRunTmpfsMounts(c *check.C) {
 
 // TestRunSeccompProfileDenyUnshare checks that 'docker run --security-opt seccomp:/tmp/profile.json debian:jessie unshare' exits with operation not permitted.
 func (s *DockerSuite) TestRunSeccompProfileDenyUnshare(c *check.C) {
-	testRequires(c, SameHostDaemon, seccompEnabled)
+	testRequires(c, SameHostDaemon, seccompEnabled, Apparmor)
 	jsonData := `{
 	"defaultAction": "SCMP_ACT_ALLOW",
 	"syscalls": [
@@ -765,10 +774,8 @@ func (s *DockerSuite) TestRunSeccompProfileDenyChmod(c *check.C) {
 	]
 }`
 	tmpFile, err := ioutil.TempFile("", "profile.json")
+	c.Assert(err, check.IsNil)
 	defer tmpFile.Close()
-	if err != nil {
-		c.Fatal(err)
-	}
 
 	if _, err := tmpFile.Write([]byte(jsonData)); err != nil {
 		c.Fatal(err)
@@ -783,7 +790,7 @@ func (s *DockerSuite) TestRunSeccompProfileDenyChmod(c *check.C) {
 // TestRunSeccompProfileDenyUnshareUserns checks that 'docker run debian:jessie unshare --map-root-user --user sh -c whoami' with a specific profile to
 // deny unhare of a userns exits with operation not permitted.
 func (s *DockerSuite) TestRunSeccompProfileDenyUnshareUserns(c *check.C) {
-	testRequires(c, SameHostDaemon, seccompEnabled)
+	testRequires(c, SameHostDaemon, seccompEnabled, Apparmor)
 	// from sched.h
 	jsonData := fmt.Sprintf(`{
 	"defaultAction": "SCMP_ACT_ALLOW",
@@ -900,5 +907,38 @@ func (s *DockerSuite) TestRunApparmorProcDirectory(c *check.C) {
 	runCmd = exec.Command(dockerBinary, "run", "--security-opt", "seccomp:unconfined", "debian:jessie", "chmod", "777", "/proc/1/attr/current")
 	if out, _, err := runCommandWithOutput(runCmd); err == nil || !(strings.Contains(out, "Permission denied") || strings.Contains(out, "Operation not permitted")) {
 		c.Fatalf("expected chmod 777 /proc/1/attr/current to fail, got %s: %v", out, err)
+	}
+}
+
+func (s *DockerSuite) TestRunSysctls(c *check.C) {
+
+	testRequires(c, DaemonIsLinux)
+	var err error
+
+	out, _ := dockerCmd(c, "run", "--sysctl", "net.ipv4.ip_forward=1", "--name", "test", "busybox", "cat", "/proc/sys/net/ipv4/ip_forward")
+	c.Assert(strings.TrimSpace(out), check.Equals, "1")
+
+	out, err = inspectFieldJSON("test", "HostConfig.Sysctls")
+	c.Assert(err, check.IsNil)
+
+	sysctls := make(map[string]string)
+	err = json.Unmarshal([]byte(out), &sysctls)
+	c.Assert(err, check.IsNil)
+	c.Assert(sysctls["net.ipv4.ip_forward"], check.Equals, "1")
+
+	out, _ = dockerCmd(c, "run", "--sysctl", "net.ipv4.ip_forward=0", "--name", "test1", "busybox", "cat", "/proc/sys/net/ipv4/ip_forward")
+	c.Assert(strings.TrimSpace(out), check.Equals, "0")
+
+	out, err = inspectFieldJSON("test1", "HostConfig.Sysctls")
+	c.Assert(err, check.IsNil)
+
+	err = json.Unmarshal([]byte(out), &sysctls)
+	c.Assert(err, check.IsNil)
+	c.Assert(sysctls["net.ipv4.ip_forward"], check.Equals, "0")
+
+	runCmd := exec.Command(dockerBinary, "run", "--sysctl", "kernel.foobar=1", "--name", "test2", "busybox", "cat", "/proc/sys/kernel/foobar")
+	out, _, _ = runCommandWithOutput(runCmd)
+	if !strings.Contains(out, "invalid value") {
+		c.Fatalf("expected --sysctl to fail, got %s", out)
 	}
 }

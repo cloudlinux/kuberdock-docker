@@ -2,9 +2,11 @@ package daemon
 
 import (
 	"runtime"
+	"sort"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/container"
+	"github.com/docker/docker/daemon/execdriver"
 	derr "github.com/docker/docker/errors"
 	"github.com/docker/docker/runconfig"
 	containertypes "github.com/docker/engine-api/types/container"
@@ -134,14 +136,31 @@ func (daemon *Daemon) containerStart(container *container.Container) (err error)
 		}
 	}
 
-	mounts, err := daemon.setupMounts(container)
+	ms, err := daemon.setupMounts(container)
 	if err != nil {
 		return err
 	}
-	mounts = append(mounts, container.IpcMounts()...)
-	mounts = append(mounts, container.TmpfsMounts()...)
+	ms = append(ms, container.IpcMounts()...)
+	ms = append(ms, container.TmpfsMounts()...)
+	rootUID, rootGID := daemon.GetRemappedUIDGID()
+	m, err := container.SecretMount(rootUID, rootGID)
+	if err != nil {
+		return err
+	}
+	// SecretMount() returns m == nil && err == nil
+	// we check m before appending and dereferencing it
+	if m != nil {
+		ms = append([]execdriver.Mount{*m}, ms...)
+	}
+	sort.Sort(mounts(ms))
+	container.Command.Mounts = ms
 
-	container.Command.Mounts = mounts
+	jsonPath, err := container.ConfigPath()
+	if err != nil {
+		return err
+	}
+	container.Command.ContainerJSONPath = jsonPath
+
 	if err := daemon.waitForStart(container); err != nil {
 		return err
 	}
