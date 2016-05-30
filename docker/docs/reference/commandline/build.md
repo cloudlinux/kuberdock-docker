@@ -26,6 +26,7 @@ parent = "smn_cli"
       --force-rm                      Always remove intermediate containers
       --help                          Print usage
       --isolation=""                  Container isolation technology
+      --label=[]                      Set metadata for an image
       -m, --memory=""                 Memory limit for all build containers
       --memory-swap=""                A positive integer equal to memory plus swap. Specify -1 to enable unlimited swap.
       --no-cache                      Do not use cache when building the image
@@ -277,7 +278,7 @@ flag](../run.md#specifying-custom-cgroups).
 
 Using the `--ulimit` option with `docker build` will cause each build step's
 container to be started using those [`--ulimit`
-flag values](../run.md#setting-ulimits-in-a-container).
+flag values](./run.md#set-ulimits-in-container-ulimit).
 
 ### Set build-time variables (--build-arg)
 

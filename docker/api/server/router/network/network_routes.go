@@ -8,7 +8,6 @@ import (
 	"golang.org/x/net/context"
 
 	"github.com/docker/docker/api/server/httputils"
-	"github.com/docker/docker/daemon"
 	"github.com/docker/docker/runconfig"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/filters"
@@ -81,7 +80,7 @@ func (n *networkRouter) postNetworkCreate(ctx context.Context, w http.ResponseWr
 			fmt.Sprintf("%s is a pre-defined network and cannot be created", create.Name))
 	}
 
-	nw, err := n.backend.GetNetwork(create.Name, daemon.NetworkByName)
+	nw, err := n.backend.GetNetworkByName(create.Name)
 	if _, ok := err.(libnetwork.ErrNoSuchNetwork); err != nil && !ok {
 		return err
 	}
@@ -92,7 +91,7 @@ func (n *networkRouter) postNetworkCreate(ctx context.Context, w http.ResponseWr
 		warning = fmt.Sprintf("Network with name %s (id : %s) already exists", nw.Name(), nw.ID())
 	}
 
-	nw, err = n.backend.CreateNetwork(create.Name, create.Driver, create.IPAM, create.Options, create.Internal)
+	nw, err = n.backend.CreateNetwork(create.Name, create.Driver, create.IPAM, create.Options, create.Labels, create.Internal, create.EnableIPv6)
 	if err != nil {
 		return err
 	}
@@ -148,7 +147,14 @@ func (n *networkRouter) postNetworkDisconnect(ctx context.Context, w http.Respon
 }
 
 func (n *networkRouter) deleteNetwork(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
-	return n.backend.DeleteNetwork(vars["id"])
+	if err := httputils.ParseForm(r); err != nil {
+		return err
+	}
+	if err := n.backend.DeleteNetwork(vars["id"]); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 func buildNetworkResource(nw libnetwork.Network) *types.NetworkResource {
@@ -157,13 +163,18 @@ func buildNetworkResource(nw libnetwork.Network) *types.NetworkResource {
 		return r
 	}
 
+	info := nw.Info()
 	r.Name = nw.Name()
 	r.ID = nw.ID()
-	r.Scope = nw.Info().Scope()
+	r.Scope = info.Scope()
 	r.Driver = nw.Type()
-	r.Options = nw.Info().DriverOptions()
+	r.EnableIPv6 = info.IPv6Enabled()
+	r.Internal = info.Internal()
+	r.Options = info.DriverOptions()
 	r.Containers = make(map[string]types.EndpointResource)
-	buildIpamResources(r, nw)
+	buildIpamResources(r, info)
+	r.Internal = info.Internal()
+	r.Labels = info.Labels()
 
 	epl := nw.Endpoints()
 	for _, e := range epl {
@@ -172,19 +183,20 @@ func buildNetworkResource(nw libnetwork.Network) *types.NetworkResource {
 			continue
 		}
 		sb := ei.Sandbox()
-		if sb == nil {
-			continue
+		key := "ep-" + e.ID()
+		if sb != nil {
+			key = sb.ContainerID()
 		}
 
-		r.Containers[sb.ContainerID()] = buildEndpointResource(e)
+		r.Containers[key] = buildEndpointResource(e)
 	}
 	return r
 }
 
-func buildIpamResources(r *types.NetworkResource, nw libnetwork.Network) {
-	id, opts, ipv4conf, ipv6conf := nw.Info().IpamConfig()
+func buildIpamResources(r *types.NetworkResource, nwInfo libnetwork.NetworkInfo) {
+	id, opts, ipv4conf, ipv6conf := nwInfo.IpamConfig()
 
-	ipv4Info, ipv6Info := nw.Info().IpamInfo()
+	ipv4Info, ipv6Info := nwInfo.IpamInfo()
 
 	r.IPAM.Driver = id
 

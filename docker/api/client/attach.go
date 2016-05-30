@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 
+	"golang.org/x/net/context"
+
 	"github.com/Sirupsen/logrus"
 	Cli "github.com/docker/docker/cli"
 	flag "github.com/docker/docker/pkg/mflag"
@@ -24,7 +26,7 @@ func (cli *DockerCli) CmdAttach(args ...string) error {
 
 	cmd.ParseFlags(args, true)
 
-	c, err := cli.client.ContainerInspect(cmd.Arg(0))
+	c, err := cli.client.ContainerInspect(context.Background(), cmd.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -39,12 +41,6 @@ func (cli *DockerCli) CmdAttach(args ...string) error {
 
 	if err := cli.CheckTtyInput(!*noStdin, c.Config.Tty); err != nil {
 		return err
-	}
-
-	if c.Config.Tty && cli.isTerminalOut {
-		if err := cli.monitorTtySize(cmd.Arg(0), false); err != nil {
-			logrus.Debugf("Error monitoring TTY size: %s", err)
-		}
 	}
 
 	if *detachKeys != "" {
@@ -70,7 +66,7 @@ func (cli *DockerCli) CmdAttach(args ...string) error {
 		defer signal.StopCatch(sigc)
 	}
 
-	resp, err := cli.client.ContainerAttach(options)
+	resp, err := cli.client.ContainerAttach(context.Background(), options)
 	if err != nil {
 		return err
 	}
@@ -80,6 +76,21 @@ func (cli *DockerCli) CmdAttach(args ...string) error {
 			return err
 		}
 		defer cli.restoreTerminal(in)
+	}
+
+	if c.Config.Tty && cli.isTerminalOut {
+		height, width := cli.getTtySize()
+		// To handle the case where a user repeatedly attaches/detaches without resizing their
+		// terminal, the only way to get the shell prompt to display for attaches 2+ is to artificially
+		// resize it, then go back to normal. Without this, every attach after the first will
+		// require the user to manually resize or hit enter.
+		cli.resizeTtyTo(cmd.Arg(0), height+1, width+1, false)
+
+		// After the above resizing occurs, the call to monitorTtySize below will handle resetting back
+		// to the actual size.
+		if err := cli.monitorTtySize(cmd.Arg(0), false); err != nil {
+			logrus.Debugf("Error monitoring TTY size: %s", err)
+		}
 	}
 
 	if err := cli.holdHijackedConnection(c.Config.Tty, in, cli.out, cli.err, resp); err != nil {

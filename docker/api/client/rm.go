@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"golang.org/x/net/context"
+
 	Cli "github.com/docker/docker/cli"
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/engine-api/types"
@@ -28,21 +30,27 @@ func (cli *DockerCli) CmdRm(args ...string) error {
 		}
 		name = strings.Trim(name, "/")
 
-		options := types.ContainerRemoveOptions{
-			ContainerID:   name,
-			RemoveVolumes: *v,
-			RemoveLinks:   *link,
-			Force:         *force,
-		}
-
-		if err := cli.client.ContainerRemove(options); err != nil {
-			errs = append(errs, fmt.Sprintf("Failed to remove container (%s): %s", name, err))
+		if err := cli.removeContainer(name, *v, *link, *force); err != nil {
+			errs = append(errs, err.Error())
 		} else {
 			fmt.Fprintf(cli.out, "%s\n", name)
 		}
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("%s", strings.Join(errs, "\n"))
+	}
+	return nil
+}
+
+func (cli *DockerCli) removeContainer(containerID string, removeVolumes, removeLinks, force bool) error {
+	options := types.ContainerRemoveOptions{
+		ContainerID:   containerID,
+		RemoveVolumes: removeVolumes,
+		RemoveLinks:   removeLinks,
+		Force:         force,
+	}
+	if err := cli.client.ContainerRemove(context.Background(), options); err != nil {
+		return err
 	}
 	return nil
 }

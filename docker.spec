@@ -9,20 +9,22 @@
 %global project docker
 %global repo %{project}
 %global common_path %{provider}.%{provider_tld}/%{project}
-%global d_version 1.10.2
+%global d_version 1.11.1
 
 %global import_path %{common_path}/%{repo}
 %global import_path_libcontainer %{common_path}/libcontainer
 
-%global d_commit a01dc02d9c369141f8bbbea0f51e8759dd6e5b93
+%global d_commit 9dea74f3a01d9a0b51ed6806c16af3e77a35a722
 %global d_shortcommit %(c=%{d_commit}; echo ${c:0:7})
 %global d_dist %(echo %{?dist} | sed 's/./-/')
 
-%global utils_commit dab51acd1b1a77f7cb01a1b7e2129ec85c846b71
+%global utils_commit b851c03ddae1db30a4acf5e4cc5e31b6a671af35
+%global utils_shortcommit %(c=%{utils_commit}; echo ${c:0:7})
 
 # %%{name}-selinux stuff (prefix with ds_ for version/release etc.)
 # Some bits borrowed from the openstack-selinux package
-%global ds_commit dbfad05ac749c9cdf5df57f6a5132f4cc0493098
+# !!!!!!!!!!! from branch RHEL-1.10
+%global ds_commit 032bcda7b1eb6d9d75d3c0ce64d9d35cdb9c7b85
 %global ds_shortcommit %(c=%{ds_commit}; echo ${c:0:7})
 %global selinuxtype targeted
 %global moduletype services
@@ -30,8 +32,17 @@
 
 # %%{name}-storage-setup stuff (prefix with dss_ for version/release etc.)
 %global dss_libdir %{_prefix}/lib/%{name}-storage-setup
-%global dss_commit e9722cc6da4b46d783a9c4cf86ac4b8aaf7ce301
+%global dss_commit f087cb16d6751d29821494a86b9ff2f302ae9ea7
 %global dss_shortcommit %(c=%{dss_commit}; echo ${c:0:7})
+
+%global runc_commit e87436998478d222be209707503c27f6f91be0c5
+%global runc_shortcommit %(c=%{runc_commit}; echo ${c:0:7})
+
+%global containerd_commit d2f03861c91edaafdcb3961461bf82ae83785ed7
+%global containerd_shortcommit %(c=%{containerd_commit}; echo ${c:0:7})
+
+%global migrator_commit 994c35cbf7ae094d4cb1230b85631ecedd77b0d8
+%global migrator_shortcommit %(c=%{migrator_commit}; echo ${c:0:7})
 
 # Usage: _format var format
 # Expand 'modulenames' into various formats as needed
@@ -43,9 +54,9 @@
 
 # Version of SELinux we were using
 %if 0%{?fedora} >= 22
-%global selinux_policyver 3.13.1-119
+%global selinux_policyver 3.13.1-155
 %else
-%global selinux_policyver 3.13.1-23
+%global selinux_policyver 3.13.1-39
 %endif
 
 Name: %{repo}
@@ -66,23 +77,26 @@ Source4: %{name}-storage.sysconfig
 Source5: %{name}-logrotate.sh
 Source6: README.%{name}-logrotate
 Source7: %{name}-network.sysconfig
-# Source11 is the source tarball for %%{name}tarsum and %%{name}-fetch
-Source11: https://%{provider}.%{provider_tld}/vbatts/%{name}-utils/archive/%{utils_commit}.tar.gz
-# Source12 is the source tarball for %%{name}-selinux
-Source12: https://%{provider}.%{provider_tld}/fedora-cloud/%{name}-selinux/archive/%{ds_commit}/%{name}-selinux-%{ds_shortcommit}.tar.gz
-# Source13 is the source tarball for %%{name}-storage-setup
+Source8: %{name}-containerd.service
+Source11: https://%{provider}.%{provider_tld}/vbatts/%{name}-utils/archive/%{repo}-utils-%{utils_shortcommit}.tar.gz
+Source12: https://%{provider}.%{provider_tld}/fedora-cloud/%{name}-selinux/archive/%{ds_commit}/%{name}-selinux-%{ds_commit}.zip
 Source13: https://%{provider}.%{provider_tld}/projectatomic/%{name}-storage-setup/archive/%{dss_commit}/%{name}-storage-setup-%{dss_shortcommit}.tar.gz
+Source14: https://%{provider}.%{provider_tld}/opencontainers/runc/runc-%{runc_shortcommit}.tar.gz
+Source15: https://%{provider}.%{provider_tld}/docker/containerd/containerd-%{containerd_shortcommit}.tar.gz
+Source16: https://%{provider}.%{provider_tld}/%{repo}/v1.10-migrator-%{migrator_shortcommit}.tar.gz
 
 Patch999: 0999-kuberdock-docker-selinux.patch
 
 BuildRequires: glibc-static
-BuildRequires: golang == 1.4.2
+BuildRequires: golang >= 1.4.2
+BuildRequires: git
 BuildRequires: device-mapper-devel
 BuildRequires: pkgconfig(audit)
 BuildRequires: btrfs-progs-devel
 BuildRequires: sqlite-devel
 BuildRequires: go-md2man
 BuildRequires: pkgconfig(systemd)
+BuildRequires: libseccomp-devel
 # appropriate systemd version as per rhbz#1171054
 Requires(post): systemd
 Requires(preun): systemd
@@ -92,18 +106,19 @@ Requires: xz
 Requires: device-mapper-libs >= 7:1.02.90-1
 #Requires: subscription-manager
 Provides: lxc-%{name} = %{epoch}:%{d_version}-%{release}
-Provides: %{name}-io = %{epoch}:%{d_version}-%{release}
+Provides: %{name} = %{epoch}:%{d_version}-%{release}
 
 # RE: rhbz#1195804 - ensure min NVR for selinux-policy
-Requires: selinux-policy >= 3.13.1-23
+Requires: selinux-policy >= %{selinux_policyver}
 Requires(pre): %{name}-selinux >= %{epoch}:%{version}-%{release}
+Requires: libseccomp
 
 # rhbz#1214070 - update deps for d-s-s
 Requires: lvm2 >= 2.02.112
 Requires: xfsprogs
 
 # rhbz#1282898 - obsolete docker-storage-setup
-Obsoletes: %{repo}-storage-setup <= 0.0.4-2
+Obsoletes: %{repo}-storage-setup <= 0.5-3
 
 %description
 Docker is an open-source engine that automates the deployment of any
@@ -115,6 +130,12 @@ and between virtually any server. The same container that a developer builds
 and tests on a laptop will run at scale, in production*, on VMs, bare-metal
 servers, OpenStack clusters, public instances, or combinations of the above.
 
+%package utils
+Summary: External utilities for the %{repo} experience
+
+%description utils
+%{summary}
+
 %if 0%{?with_unit_test}
 %package unit-test
 Summary: %{summary} - for running unit tests
@@ -125,8 +146,8 @@ Summary: %{summary} - for running unit tests
 
 %package logrotate
 Summary: cron job to run logrotate on Docker containers
-Requires: %{name} = %{epoch}:%{d_version}-%{release}
-Provides: %{name}-io-logrotate = %{epoch}:%{d_version}-%{release}
+Requires: %{name} = %{epoch}:%{version}-%{release}
+Provides: %{name}-logrotate = %{epoch}:%{version}-%{release}
 
 %description logrotate
 This package installs %{summary}. logrotate is assumed to be installed on
@@ -141,27 +162,52 @@ Requires(post): selinux-policy-targeted >= %{selinux_policyver}
 Requires(post): policycoreutils
 Requires(post): policycoreutils-python
 Requires(post): libselinux-utils
-Provides: %{epoch}:%{name}-io-selinux
+Provides: %{repo}-selinux = %{epoch}:%{version}-%{release}
 
 %description selinux
 SELinux policy modules for use with Docker.
 
-%prep
-%setup -q
-cp %{SOURCE6} .
+%package vim
+Summary: vim syntax highlighting files for Docker
+Requires: %{repo} = %{epoch}:%{version}-%{release}
+Requires: vim
+Provides: %{repo}-vim = %{epoch}:%{version}-%{release}
 
-# unpack %%{name}-selinux
-tar zxf %{SOURCE12}
-# apply KuberDock patches
+%description vim
+This package installs %{summary}.
+
+%package zsh-completion
+Summary: zsh completion files for Docker
+Requires: %{repo} = %{epoch}:%{version}-%{release}
+Requires: zsh
+Provides: %{repo}-zsh-completion = %{epoch}:%{version}-%{release}
+
+%description zsh-completion
+This package installs %{summary}.
+
+%package v1.10-migrator
+Summary: Calculates SHA256 checksums for docker layer content
+License: ASL 2.0 and CC-BY-SA
+
+%description v1.10-migrator
+Starting from v1.10 docker uses content addressable IDs for the images and
+layers instead of using generated ones. This tool calculates SHA256 checksums
+for docker layer content, so that they don't need to be recalculated when the
+daemon starts for the first time.
+
+The migration usually runs on daemon startup but it can be quite slow(usually
+100-200MB/s) and daemon will not be able to accept requests during
+that time. You can run this tool instead while the old daemon is still
+running and skip checksum calculation on startup.
+
+
+%prep
+%setup -q -a11 -a12 -a13 -a14 -a15 -a16
+cp %{SOURCE6} .
 pushd %{name}-selinux-%{ds_commit}
 %patch999 -p1
 popd
 
-# untar %%{name}-utils tarball
-tar zxf %{SOURCE11}
-
-# untar d-s-s
-tar zxf %{SOURCE13}
 
 %build
 mkdir _build
@@ -170,32 +216,45 @@ pushd _build
   mkdir -p src/%{provider}.%{provider_tld}/{%{name},vbatts}
   ln -s $(dirs +1 -l) src/%{import_path}
   ln -s $(dirs +1 -l)/%{name}-utils-%{utils_commit} src/%{provider}.%{provider_tld}/vbatts/%{name}-utils
+  ln -s $(dirs +1 -l)/containerd-%{containerd_commit} src/%{provider}.%{provider_tld}/docker/containerd
 popd
 
 export DOCKER_GITCOMMIT="%{d_shortcommit}/%{d_version}"
 export DOCKER_BUILDTAGS='selinux btrfs_noversion'
 export GOPATH=$(pwd)/_build:$(pwd)/vendor:%{gopath}
 
-# build %%{name} binary
-sed -i '/rm -r autogen/d' hack/make.sh
-sed -i 's/$/%{d_dist}/' VERSION
-DOCKER_DEBUG=1 hack/make.sh dynbinary
+DEBUG=1 bash -x hack/make.sh dynbinary
+man/md2man-all.sh
 cp contrib/syntax/vim/LICENSE LICENSE-vim-syntax
 cp contrib/syntax/vim/README.md README-vim-syntax.md
+
+pushd $(pwd)/_build/src
+go build -ldflags "-B 0x$(head -c20 /dev/urandom|od -An -tx1|tr -d ' \n')" github.com/vbatts/%{repo}-utils/cmd/%{repo}-fetch
+go build -ldflags "-B 0x$(head -c20 /dev/urandom|od -An -tx1|tr -d ' \n')" github.com/vbatts/%{repo}-utils/cmd/%{repo}tarsum
+popd
 
 # build %%{name}-selinux
 pushd %{name}-selinux-%{ds_commit}
 make SHARE="%{_datadir}" TARGETS="%{modulenames}"
 popd
 
-pushd $(pwd)/_build/src
-# build %{repo}tarsum and %{repo}-fetch
-go build %{provider}.%{provider_tld}/vbatts/%{name}-utils/cmd/%{name}-fetch
-go build %{provider}.%{provider_tld}/vbatts/%{name}-utils/cmd/%{name}tarsum
+# build v1.10-migrator
+go get -u github.com/tools/godep
+export PATH=$PATH:$(pwd)/_build/bin
+pushd v1.10-migrator-%{migrator_commit}
+make v1.10-migrator-local
 popd
 
-# build %%{name} manpages
-man/md2man-all.sh
+# build docker-runc
+pushd runc-%{runc_commit}
+make
+popd
+
+# build docker-containerd
+pushd containerd-%{containerd_commit}
+make
+popd
+
 
 %install
 # install binary
@@ -255,6 +314,7 @@ install -d -m 700 %{buildroot}%{_sharedstatedir}/%{name}
 # install systemd/init scripts
 install -d %{buildroot}%{_unitdir}
 install -p -m 644 %{SOURCE1} %{buildroot}%{_unitdir}
+install -p -m 644 %{SOURCE8} %{buildroot}%{_unitdir}
 
 # for additional args
 install -d %{buildroot}%{_sysconfdir}/sysconfig/
@@ -285,16 +345,6 @@ rm -rf %{buildroot}%{_sharedstatedir}/%{name}-unit-test/contrib/init/openrc/%{na
 # remove %%{name}-selinux rpm spec file
 rm -rf %{name}-selinux-%{ds_commit}/%{name}-selinux.spec
 
-# don't install secrets dir
-# install -d -p -m 750 %{buildroot}/%{_datadir}/rhel/secrets
-# rhbz#1110876 - update symlinks for subscription management
-#ln -s %{_sysconfdir}/pki/entitlement %{buildroot}%{_datadir}/rhel/secrets/etc-pki-entitlement
-#ln -s %{_sysconfdir}/rhsm %{buildroot}%{_datadir}/rhel/secrets/rhsm
-#ln -s %{_sysconfdir}/yum.repos.d/redhat.repo %{buildroot}%{_datadir}/rhel/secrets/rhel7.repo
-
-#mkdir -p %{buildroot}/etc/%{name}/certs.d/redhat.{com,io}
-#ln -s %{_sysconfdir}/rhsm/ca/redhat-uep.pem %{buildroot}/%{_sysconfdir}/%{name}/certs.d/redhat.com/redhat-ca.crt
-#ln -s %{_sysconfdir}/rhsm/ca/redhat-uep.pem %{buildroot}/%{_sysconfdir}/%{name}/certs.d/redhat.io/redhat-ca.crt
 mkdir -p %{buildroot}/etc/%{name}/certs.d
 
 # install %%{name} config directory
@@ -315,6 +365,15 @@ install -d %{buildroot}%{_mandir}/man1
 install -p -m 644 %{name}-storage-setup.1 %{buildroot}%{_mandir}/man1
 popd
 
+# install v1.10-migrator
+install -d %{buildroot}%{_bindir}
+install -p -m 700 v1.10-migrator-%{migrator_commit}/v1.10-migrator-local %{buildroot}%{_bindir}
+cp v1.10-migrator-%{migrator_commit}/CONTRIBUTING.md CONTRIBUTING-v1.10-migrator.md
+cp v1.10-migrator-%{migrator_commit}/README.md README-v1.10-migrator.md
+cp v1.10-migrator-%{migrator_commit}/LICENSE.code LICENSE-v1.10-migrator.code
+cp v1.10-migrator-%{migrator_commit}/LICENSE.docs LICENSE-v1.10-migrator.docs
+
+
 %check
 [ ! -w /run/%{name}.sock ] || {
     mkdir test_dir
@@ -326,6 +385,7 @@ popd
     popd
 }
 
+
 %pre
 getent passwd %{name}root > /dev/null || %{_sbindir}/useradd -r -d %{_sharedstatedir}/%{name} -s /sbin/nologin -c "Docker User" %{name}root
 exit 0
@@ -335,6 +395,9 @@ exit 0
 
 %post selinux
 # Install all modules in a single transaction
+if [ $1 -eq 1 ]; then
+    %{_sbindir}/setsebool -P -N virt_use_nfs=1 virt_sandbox_use_all_caps=1
+fi
 %_format MODULES %{_datadir}/selinux/packages/$x.pp.bz2
 %{_sbindir}/semodule -n -s %{selinuxtype} -i $MODULES
 if %{_sbindir}/selinuxenabled ; then
@@ -360,19 +423,19 @@ if %{_sbindir}/selinuxenabled ; then
 fi
 fi
 
+%triggerpost -n %{repo}-v1.10-migrator -- %{repo} < %{version}
+%{_bindir}/v1.10-migrator-local 2>/dev/null
+exit 0
+
+
 %files
 %doc AUTHORS CHANGELOG.md CONTRIBUTING.md MAINTAINERS NOTICE
 %doc LICENSE* README*.md
 %{_mandir}/man1/%{name}*
 %{_mandir}/man5/*
-%{_bindir}/%{name}
-#%dir %{_datadir}/rhel
-#%dir %{_datadir}/rhel/secrets
-#%{_datadir}/rhel/secrets/etc-pki-entitlement
-#%{_datadir}/rhel/secrets/rhel7.repo
-#%{_datadir}/rhel/secrets/rhsm
 %{_libexecdir}/%{name}
 %{_unitdir}/%{name}.service
+%{_unitdir}/%{name}-containerd.service
 %config(noreplace) %{_sysconfdir}/sysconfig/%{name}
 %config(noreplace) %{_sysconfdir}/sysconfig/%{name}-storage
 %config(noreplace) %{_sysconfdir}/sysconfig/%{name}-network
@@ -381,18 +444,7 @@ fi
 %{_udevrulesdir}/80-%{name}.rules
 %dir %{_datadir}/fish/vendor_completions.d/
 %{_datadir}/fish/vendor_completions.d/%{name}.fish
-%dir %{_datadir}/vim/vimfiles/doc
-%{_datadir}/vim/vimfiles/doc/%{name}file.txt
-%dir %{_datadir}/vim/vimfiles/ftdetect
-%{_datadir}/vim/vimfiles/ftdetect/%{name}file.vim
-%dir %{_datadir}/vim/vimfiles/syntax
-%{_datadir}/vim/vimfiles/syntax/%{name}file.vim
-%dir %{_datadir}/zsh/site-functions
-%{_datadir}/zsh/site-functions/_%{name}
 %{_sysconfdir}/%{name}
-%{_bindir}/%{name}-fetch
-%{_bindir}/%{name}tarsum
-# %%{name}-storage-setup specific
 %config(noreplace) %{_sysconfdir}/sysconfig/%{name}-storage-setup
 %{_unitdir}/%{name}-storage-setup.service
 %{_bindir}/%{name}-storage-setup
@@ -412,8 +464,35 @@ fi
 %doc %{name}-selinux-%{ds_commit}/README.md
 %{_datadir}/selinux/*
 
+%files vim
+%{_datadir}/vim/vimfiles/doc/%{repo}file.txt
+%{_datadir}/vim/vimfiles/ftdetect/%{repo}file.vim
+%{_datadir}/vim/vimfiles/syntax/%{repo}file.vim
+
+%files zsh-completion
+%{_datadir}/zsh/site-functions/_%{repo}
+
+%files utils
+%{_bindir}/%{repo}-fetch
+%{_bindir}/%{repo}tarsum
+
+%files v1.10-migrator
+%license LICENSE-v1.10-migrator.{code,docs}
+%doc CONTRIBUTING-v1.10-migrator.md README-v1.10-migrator.md
+%{_bindir}/v1.10-migrator-local
+
+
 %changelog
-* Wed Mar 09 2016 Sergey Fokin <sfokin@cloudlinux.com> - 1.10.2-1
+* Mon May 30 2016 Sergey Fokin <sfokin@cloudlinux.com> - 1:1.11.1-1
+- update to 1.11.1
+- update docker-selinux to 032bcda7b1eb6d9d75d3c0ce64d9d35cdb9c7b85
+- update docker-utils to b851c03ddae1db30a4acf5e4cc5e31b6a671af35
+- update docker-storage-setup f087cb16d6751d29821494a86b9ff2f302ae9ea7
+- add runc e87436998478d222be209707503c27f6f91be0c5
+- add containerd d2f03861c91edaafdcb3961461bf82ae83785ed7
+- add v1.10-migrator 994c35cbf7ae094d4cb1230b85631ecedd77b0d8
+
+* Wed Mar 09 2016 Sergey Fokin <sfokin@cloudlinux.com> - 1:1.10.2-1
 - update to 1.10.2
 
 * Thu Dec 10 2015 Johnny Hughes <johnny@centos.org> - 1.8.2-10

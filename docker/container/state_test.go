@@ -4,8 +4,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/docker/docker/daemon/execdriver"
 )
 
 func TestStateRunStop(t *testing.T) {
@@ -14,12 +12,12 @@ func TestStateRunStop(t *testing.T) {
 		started := make(chan struct{})
 		var pid int64
 		go func() {
-			runPid, _ := s.waitRunning(-1 * time.Second)
+			runPid, _ := s.WaitRunning(-1 * time.Second)
 			atomic.StoreInt64(&pid, int64(runPid))
 			close(started)
 		}()
 		s.Lock()
-		s.SetRunning(i + 100)
+		s.SetRunning(i+100, false)
 		s.Unlock()
 
 		if !s.IsRunning() {
@@ -41,8 +39,8 @@ func TestStateRunStop(t *testing.T) {
 		if runPid != i+100 {
 			t.Fatalf("Pid %v, expected %v", runPid, i+100)
 		}
-		if pid, err := s.waitRunning(-1 * time.Second); err != nil || pid != i+100 {
-			t.Fatalf("waitRunning returned pid: %v, err: %v, expected pid: %v, err: %v", pid, err, i+100, nil)
+		if pid, err := s.WaitRunning(-1 * time.Second); err != nil || pid != i+100 {
+			t.Fatalf("WaitRunning returned pid: %v, err: %v, expected pid: %v, err: %v", pid, err, i+100, nil)
 		}
 
 		stopped := make(chan struct{})
@@ -52,7 +50,7 @@ func TestStateRunStop(t *testing.T) {
 			atomic.StoreInt64(&exit, int64(exitCode))
 			close(stopped)
 		}()
-		s.SetStoppedLocking(&execdriver.ExitStatus{ExitCode: i})
+		s.SetStoppedLocking(&ExitStatus{ExitCode: i})
 		if s.IsRunning() {
 			t.Fatal("State is running")
 		}
@@ -82,7 +80,7 @@ func TestStateTimeoutWait(t *testing.T) {
 	s := NewState()
 	started := make(chan struct{})
 	go func() {
-		s.waitRunning(100 * time.Millisecond)
+		s.WaitRunning(100 * time.Millisecond)
 		close(started)
 	}()
 	select {
@@ -93,12 +91,12 @@ func TestStateTimeoutWait(t *testing.T) {
 	}
 
 	s.Lock()
-	s.SetRunning(49)
+	s.SetRunning(49, false)
 	s.Unlock()
 
 	stopped := make(chan struct{})
 	go func() {
-		s.waitRunning(100 * time.Millisecond)
+		s.WaitRunning(100 * time.Millisecond)
 		close(stopped)
 	}()
 	select {

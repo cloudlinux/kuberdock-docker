@@ -46,7 +46,7 @@ func (s *DockerSuite) TestEventsRedirectStdout(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsOOMDisableFalse(c *check.C) {
-	testRequires(c, DaemonIsLinux, oomControl, memoryLimitSupport, NotGCCGO)
+	testRequires(c, DaemonIsLinux, oomControl, memoryLimitSupport, NotGCCGO, swapMemorySupport)
 
 	errChan := make(chan error)
 	go func() {
@@ -76,9 +76,15 @@ func (s *DockerSuite) TestEventsOOMDisableFalse(c *check.C) {
 }
 
 func (s *DockerSuite) TestEventsOOMDisableTrue(c *check.C) {
-	testRequires(c, DaemonIsLinux, oomControl, memoryLimitSupport, NotGCCGO)
+	testRequires(c, DaemonIsLinux, oomControl, memoryLimitSupport, NotGCCGO, NotArm, swapMemorySupport)
 
 	errChan := make(chan error)
+	observer, err := newEventObserver(c)
+	c.Assert(err, checker.IsNil)
+	err = observer.Start()
+	c.Assert(err, checker.IsNil)
+	defer observer.Stop()
+
 	go func() {
 		defer close(errChan)
 		out, exitCode, _ := dockerCmdWithError("run", "--oom-kill-disable=true", "--name", "oomTrue", "-m", "10MB", "busybox", "sh", "-c", "x=a; while true; do x=$x$x$x$x; done")
@@ -86,25 +92,34 @@ func (s *DockerSuite) TestEventsOOMDisableTrue(c *check.C) {
 			errChan <- fmt.Errorf("wrong exit code for OOM container: expected %d, got %d (output: %q)", expected, exitCode, out)
 		}
 	}()
-	select {
-	case err := <-errChan:
-		c.Assert(err, checker.IsNil)
-	case <-time.After(20 * time.Second):
-		defer dockerCmd(c, "kill", "oomTrue")
 
-		out, _ := dockerCmd(c, "events", "--since=0", "-f", "container=oomTrue", fmt.Sprintf("--until=%d", daemonTime(c).Unix()))
-		events := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-		nEvents := len(events)
-		c.Assert(nEvents, checker.GreaterOrEqualThan, 4) //Missing expected event
+	c.Assert(waitRun("oomTrue"), checker.IsNil)
+	defer dockerCmd(c, "kill", "oomTrue")
+	containerID := inspectField(c, "oomTrue", "Id")
 
-		c.Assert(parseEventAction(c, events[nEvents-4]), checker.Equals, "create")
-		c.Assert(parseEventAction(c, events[nEvents-3]), checker.Equals, "attach")
-		c.Assert(parseEventAction(c, events[nEvents-2]), checker.Equals, "start")
-		c.Assert(parseEventAction(c, events[nEvents-1]), checker.Equals, "oom")
-
-		out, _ = dockerCmd(c, "inspect", "-f", "{{.State.Status}}", "oomTrue")
-		c.Assert(strings.TrimSpace(out), checker.Equals, "running", check.Commentf("container should be still running"))
+	testActions := map[string]chan bool{
+		"oom": make(chan bool),
 	}
+
+	matcher := matchEventLine(containerID, "container", testActions)
+	processor := processEventMatch(testActions)
+	go observer.Match(matcher, processor)
+
+	select {
+	case <-time.After(20 * time.Second):
+		observer.CheckEventError(c, containerID, "oom", matcher)
+	case <-testActions["oom"]:
+		// ignore, done
+	case errRun := <-errChan:
+		if errRun != nil {
+			c.Fatalf("%v", errRun)
+		} else {
+			c.Fatalf("container should be still running but it's not")
+		}
+	}
+
+	status := inspectField(c, "oomTrue", "State.Status")
+	c.Assert(strings.TrimSpace(status), checker.Equals, "running", check.Commentf("container should be still running"))
 }
 
 // #18453
@@ -217,10 +232,10 @@ func (s *DockerSuite) TestEventsStreaming(c *check.C) {
 	containerID := strings.TrimSpace(out)
 
 	testActions := map[string]chan bool{
-		"create":  make(chan bool),
-		"start":   make(chan bool),
-		"die":     make(chan bool),
-		"destroy": make(chan bool),
+		"create":  make(chan bool, 1),
+		"start":   make(chan bool, 1),
+		"die":     make(chan bool, 1),
+		"destroy": make(chan bool, 1),
 	}
 
 	matcher := matchEventLine(containerID, "container", testActions)
@@ -276,8 +291,8 @@ func (s *DockerSuite) TestEventsImageUntagDelete(c *check.C) {
 	c.Assert(deleteImages(name), checker.IsNil)
 
 	testActions := map[string]chan bool{
-		"untag":  make(chan bool),
-		"delete": make(chan bool),
+		"untag":  make(chan bool, 1),
+		"delete": make(chan bool, 1),
 	}
 
 	matcher := matchEventLine(imageID, "image", testActions)

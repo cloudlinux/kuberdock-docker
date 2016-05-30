@@ -1,14 +1,16 @@
-diff --git a/docker.te b/docker.te
-index b885fde..348f197 100644
---- a/docker.te
-+++ b/docker.te
-@@ -478,3 +478,9 @@ optional_policy(`
- 		auth_use_nsswitch(systemd_machined_t)
+diff -uprN a/docker.te b/docker.te
+--- a/docker.te	2016-04-29 15:22:01.000000000 +0300
++++ b/docker.te	2016-05-30 21:04:16.759697068 +0300
+@@ -489,6 +489,12 @@ optional_policy(`
  	')
  ')
-+
+ 
 +gen_require(`
 +    type svirt_lxc_net_t;
 +')
 +
 +allow svirt_lxc_net_t docker_var_lib_t:{ filesystem file dir fd lnk_file chr_file blk_file sock_file fifo_file } *;
++
+ ########################################
+ #
+ # docker_auth local policy
