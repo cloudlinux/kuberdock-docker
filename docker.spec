@@ -316,6 +316,16 @@ install -d %{buildroot}%{_unitdir}
 install -p -m 644 %{SOURCE1} %{buildroot}%{_unitdir}
 install -p -m 644 %{SOURCE8} %{buildroot}%{_unitdir}
 
+# install docker-runc
+install -d %{buildroot}%{_libexecdir}/docker
+install -p -m 755 runc-%{runc_commit}/runc %{buildroot}%{_libexecdir}/docker/docker-runc
+
+#install docker-containerd
+install -d %{buildroot}%{_libexecdir}/docker
+install -p -m 755 containerd-%{containerd_commit}/bin/containerd %{buildroot}%{_libexecdir}/docker/docker-containerd
+install -p -m 755 containerd-%{containerd_commit}/bin/containerd-shim %{buildroot}%{_libexecdir}/docker/docker-containerd-shim
+install -p -m 755 containerd-%{containerd_commit}/bin/ctr %{buildroot}%{_libexecdir}/docker/docker-ctr
+
 # for additional args
 install -d %{buildroot}%{_sysconfdir}/sysconfig/
 install -p -m 644 %{SOURCE3} %{buildroot}%{_sysconfdir}/sysconfig/%{name}
@@ -450,6 +460,10 @@ exit 0
 %{_bindir}/%{name}-storage-setup
 %{dss_libdir}/%{name}-storage-setup
 %{dss_libdir}/libdss.sh
+%{_libexecdir}/docker/docker-runc
+%{_libexecdir}/docker/docker-containerd
+%{_libexecdir}/docker/docker-containerd-shim
+%{_libexecdir}/docker/docker-ctr
 
 %if 0%{?with_unit_test}
 %files unit-test
