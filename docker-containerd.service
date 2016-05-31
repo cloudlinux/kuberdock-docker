@@ -4,7 +4,7 @@ Documentation=https://containerd.tools/
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/docker-containerd --listen /run/containerd.sock --runtime /usr/libexec/docker/docker-runc --runtime-args --systemd-cgroup=true
+ExecStart=/usr/bin/docker-containerd --listen /run/containerd.sock --runtime /usr/bin/docker-runc --runtime-args --systemd-cgroup=true
 LimitNOFILE=1048576
 LimitNPROC=1048576
 LimitCORE=infinity
