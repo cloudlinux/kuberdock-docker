@@ -85,6 +85,7 @@ Source14: https://%{provider}.%{provider_tld}/opencontainers/runc/runc-%{runc_sh
 Source15: https://%{provider}.%{provider_tld}/docker/containerd/containerd-%{containerd_shortcommit}.tar.gz
 Source16: https://%{provider}.%{provider_tld}/%{repo}/v1.10-migrator-%{migrator_shortcommit}.tar.gz
 
+Patch998: 0998-allow_selinux_overlayfs.patch
 Patch999: 0999-kuberdock-docker-selinux.patch
 
 BuildRequires: glibc-static
@@ -204,6 +205,7 @@ running and skip checksum calculation on startup.
 %prep
 %setup -q -a11 -a12 -a13 -a14 -a15 -a16
 cp %{SOURCE6} .
+%patch998 -p1
 pushd %{name}-selinux-%{ds_commit}
 %patch999 -p1
 popd
