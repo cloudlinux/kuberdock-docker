@@ -1,0 +1,7 @@
+Verified+1: alternatives internal <alternatives@cloudlinux.com>
+Code-Review+2: Maksym Lobur <mlobur@cloudlinux.com>
+Submitted-by: Maksym Lobur <mlobur@cloudlinux.com>
+Submitted-at: Tue, 31 May 2016 16:14:36 +0300
+Reviewed-on: http://gerrit.cloudlinux.com:8080/9916
+Project: docker-kuberdock
+Branch: refs/heads/kuberdock
