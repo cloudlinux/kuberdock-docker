@@ -265,12 +265,12 @@ install -d %{buildroot}%{_libexecdir}/%{name}
 install -p -m 755 _build/src/%{name}-fetch %{buildroot}%{_bindir}
 install -p -m 755 _build/src/%{name}tarsum %{buildroot}%{_bindir}
 
-for x in bundles/*%{d_dist}; do
+for x in bundles/latest; do
     if ! test -d $x/dynbinary; then
-	continue
+    continue
     fi
-    install -p -m 755 $x/dynbinary/%{repo}-*%{d_dist} %{buildroot}%{_bindir}/%{repo}
-    install -p -m 755 $x/dynbinary/%{repo}init-*%{d_dist} %{buildroot}%{_libexecdir}/%{repo}/%{repo}init
+    rm $x/dynbinary/*.md5 $x/dynbinary/*.sha256
+    install -p -m 755 $x/dynbinary/%{repo}-%{version}* %{buildroot}%{_bindir}/%{repo}
     break
 done
 
@@ -317,14 +317,14 @@ install -p -m 644 %{SOURCE1} %{buildroot}%{_unitdir}
 install -p -m 644 %{SOURCE8} %{buildroot}%{_unitdir}
 
 # install docker-runc
-install -d %{buildroot}%{_libexecdir}/docker
-install -p -m 755 runc-%{runc_commit}/runc %{buildroot}%{_libexecdir}/docker/docker-runc
+install -d %{buildroot}%{_bindir}
+install -p -m 755 runc-%{runc_commit}/runc %{buildroot}%{_bindir}/docker-runc
 
 #install docker-containerd
-install -d %{buildroot}%{_libexecdir}/docker
-install -p -m 755 containerd-%{containerd_commit}/bin/containerd %{buildroot}%{_libexecdir}/docker/docker-containerd
-install -p -m 755 containerd-%{containerd_commit}/bin/containerd-shim %{buildroot}%{_libexecdir}/docker/docker-containerd-shim
-install -p -m 755 containerd-%{containerd_commit}/bin/ctr %{buildroot}%{_libexecdir}/docker/docker-ctr
+install -d %{buildroot}%{_bindir}
+install -p -m 755 containerd-%{containerd_commit}/bin/containerd %{buildroot}%{_bindir}/docker-containerd
+install -p -m 755 containerd-%{containerd_commit}/bin/containerd-shim %{buildroot}%{_bindir}/docker-containerd-shim
+install -p -m 755 containerd-%{containerd_commit}/bin/ctr %{buildroot}%{_bindir}/docker-ctr
 
 # for additional args
 install -d %{buildroot}%{_sysconfdir}/sysconfig/
@@ -443,7 +443,11 @@ exit 0
 %doc LICENSE* README*.md
 %{_mandir}/man1/%{name}*
 %{_mandir}/man5/*
-%{_libexecdir}/%{name}
+%{_bindir}/%{name}
+%{_bindir}/docker-runc
+%{_bindir}/docker-containerd
+%{_bindir}/docker-containerd-shim
+%{_bindir}/docker-ctr
 %{_unitdir}/%{name}.service
 %{_unitdir}/%{name}-containerd.service
 %config(noreplace) %{_sysconfdir}/sysconfig/%{name}
@@ -460,10 +464,6 @@ exit 0
 %{_bindir}/%{name}-storage-setup
 %{dss_libdir}/%{name}-storage-setup
 %{dss_libdir}/libdss.sh
-%{_libexecdir}/docker/docker-runc
-%{_libexecdir}/docker/docker-containerd
-%{_libexecdir}/docker/docker-containerd-shim
-%{_libexecdir}/docker/docker-ctr
 
 %if 0%{?with_unit_test}
 %files unit-test
