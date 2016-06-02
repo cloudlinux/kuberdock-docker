@@ -30,7 +30,7 @@ clone git github.com/RackSec/srslog 259aed10dfa74ea2961eddd1d9847619f6e98837
 clone git github.com/imdario/mergo 0.2.1
 
 #get libnetwork packages
-clone git github.com/docker/libnetwork v0.7.0-rc.7
+clone git github.com/docker/libnetwork v0.7.2-rc.1
 clone git github.com/armon/go-metrics eb0af217e5e9747e41dd5303755356b62d28e3ec
 clone git github.com/hashicorp/go-msgpack 71c2886f5a673a35f909803f38ece5810165097b
 clone git github.com/hashicorp/memberlist 9a1e242e454d2443df330bdd51a436d5a9058fc4
@@ -60,7 +60,7 @@ clone git github.com/miekg/pkcs11 df8ae6ca730422dba20c768ff38ef7d79077a59f
 clone git github.com/docker/go v1.5.1-1-1-gbaf439e
 clone git github.com/agl/ed25519 d2b94fd789ea21d12fac1a4443dd3a3f79cda72c
 
-clone git github.com/opencontainers/runc 7b6c4c418d5090f4f11eee949fdf49afd15838c9 # libcontainer
+clone git github.com/opencontainers/runc baf6536d6259209c3edfa2b22237af82942d3dfa # libcontainer
 clone git github.com/opencontainers/specs f955d90e70a98ddfb886bd930ffd076da9b67998 # specs
 clone git github.com/seccomp/libseccomp-golang 1b506fc7c24eec5a3693cdcbed40d9c226cfc6a1
 # libcontainer deps (see src/github.com/opencontainers/runc/Godeps/Godeps.json)
@@ -90,5 +90,5 @@ clone git google.golang.org/api dc6d2353af16e2a2b0ff6986af051d473a4ed468 https:/
 clone git google.golang.org/cloud dae7e3d993bc3812a2185af60552bb6b847e52a0 https://code.googlesource.com/gocloud
 
 # containerd
-clone git github.com/docker/containerd v0.2.1
+clone git github.com/docker/containerd 9dc2b3273db42c75368988a3885a3afd770069d9
 clean
