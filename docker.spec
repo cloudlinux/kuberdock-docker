@@ -9,7 +9,7 @@
 %global project docker
 %global repo %{project}
 %global common_path %{provider}.%{provider_tld}/%{project}
-%global d_version 1.11.1
+%global d_version 1.11.2
 
 %global import_path %{common_path}/%{repo}
 %global import_path_libcontainer %{common_path}/libcontainer
@@ -499,6 +499,9 @@ exit 0
 
 
 %changelog
+* * Thy Jun 2 2016 Maksym Lobur <mlobur@cloudlinux.com> - 1:1.11.2-1
+- update to 1.11.2
+
 * Mon May 30 2016 Sergey Fokin <sfokin@cloudlinux.com> - 1:1.11.1-1
 - update to 1.11.1
 - update docker-selinux to 032bcda7b1eb6d9d75d3c0ce64d9d35cdb9c7b85

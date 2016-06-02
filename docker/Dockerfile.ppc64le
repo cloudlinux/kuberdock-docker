@@ -71,13 +71,11 @@ RUN cd /usr/local/lvm2 \
 	&& make install_device-mapper
 # see https://git.fedorahosted.org/cgit/lvm2.git/tree/INSTALL
 
-# TODO install Go, using gccgo as GOROOT_BOOTSTRAP (Go 1.5+ supports ppc64le properly)
-# possibly a ppc64le/golang image?
-
-## BUILD GOLANG
-ENV GO_VERSION 1.5.4
+## BUILD GOLANG 1.6
+# NOTE: ppc64le has compatibility issues with older versions of go, so make sure the version >= 1.6
+ENV GO_VERSION 1.6.2
 ENV GO_DOWNLOAD_URL https://golang.org/dl/go${GO_VERSION}.src.tar.gz
-ENV GO_DOWNLOAD_SHA256 002acabce7ddc140d0d55891f9d4fcfbdd806b9332fb8b110c91bc91afb0bc93
+ENV GO_DOWNLOAD_SHA256 787b0b750d037016a30c6ed05a8a70a91b2e9db4bd9b1a2453aa502a63f1bccc
 ENV GOROOT_BOOTSTRAP /usr/local
 
 RUN curl -fsSL "$GO_DOWNLOAD_URL" -o golang.tar.gz \
@@ -209,7 +207,7 @@ RUN set -x \
 	&& cp runc /usr/local/bin/docker-runc
 
 # Install containerd
-ENV CONTAINERD_COMMIT v0.2.1
+ENV CONTAINERD_COMMIT 9dc2b3273db42c75368988a3885a3afd770069d9
 RUN set -x \
 	&& export GOPATH="$(mktemp -d)" \
 	&& git clone git://github.com/docker/containerd.git "$GOPATH/src/github.com/docker/containerd" \
