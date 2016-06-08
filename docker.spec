@@ -110,8 +110,8 @@ Provides: lxc-%{name} = %{epoch}:%{d_version}-%{release}
 Provides: %{name} = %{epoch}:%{d_version}-%{release}
 
 # RE: rhbz#1195804 - ensure min NVR for selinux-policy
-Requires: selinux-policy >= %{selinux_policyver}
-Requires(pre): %{name}-selinux >= %{epoch}:%{version}-%{release}
+Requires: selinux-policy = %{selinux_policyver}
+Requires(pre): %{name}-selinux = %{epoch}:%{version}-%{release}
 Requires: libseccomp
 
 # rhbz#1214070 - update deps for d-s-s
@@ -158,8 +158,8 @@ containers for this to work, failures are silently ignored.
 Summary: SELinux policies for Docker
 BuildRequires: selinux-policy
 BuildRequires: selinux-policy-devel
-Requires(post): selinux-policy-base >= %{selinux_policyver}
-Requires(post): selinux-policy-targeted >= %{selinux_policyver}
+Requires(post): selinux-policy-base = %{selinux_policyver}
+Requires(post): selinux-policy-targeted = %{selinux_policyver}
 Requires(post): policycoreutils
 Requires(post): policycoreutils-python
 Requires(post): libselinux-utils
