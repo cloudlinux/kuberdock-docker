@@ -111,7 +111,7 @@ Provides: %{name} = %{epoch}:%{d_version}-%{release}
 
 # RE: rhbz#1195804 - ensure min NVR for selinux-policy
 Requires: selinux-policy >= %{selinux_policyver}
-Requires(pre): %{name}-selinux >= %{epoch}:%{version}-%{release}
+Requires(pre): %{name}-selinux = %{epoch}:%{version}-%{release}
 Requires: libseccomp
 
 # rhbz#1214070 - update deps for d-s-s
