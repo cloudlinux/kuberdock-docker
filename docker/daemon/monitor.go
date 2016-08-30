@@ -25,6 +25,7 @@ func (daemon *Daemon) StateChanged(id string, e libcontainerd.StateInfo) error {
 		if runtime.GOOS == "windows" {
 			return errors.New("Received StateOOM from libcontainerd on Windows. This should never happen.")
 		}
+		daemon.updateHealthMonitor(c)
 		daemon.LogContainerEvent(c, "oom")
 	case libcontainerd.StateExit:
 		c.Lock()
@@ -35,12 +36,16 @@ func (daemon *Daemon) StateChanged(id string, e libcontainerd.StateInfo) error {
 		attributes := map[string]string{
 			"exitCode": strconv.Itoa(int(e.ExitCode)),
 		}
+		daemon.updateHealthMonitor(c)
 		daemon.LogContainerEventWithAttributes(c, "die", attributes)
 		daemon.Cleanup(c)
 		// FIXME: here is race condition between two RUN instructions in Dockerfile
 		// because they share same runconfig and change image. Must be fixed
 		// in builder/builder.go
-		return c.ToDisk()
+		if err := c.ToDisk(); err != nil {
+			return err
+		}
+		return daemon.postRunProcessing(c, e)
 	case libcontainerd.StateRestart:
 		c.Lock()
 		defer c.Unlock()
@@ -51,6 +56,7 @@ func (daemon *Daemon) StateChanged(id string, e libcontainerd.StateInfo) error {
 			"exitCode": strconv.Itoa(int(e.ExitCode)),
 		}
 		daemon.LogContainerEventWithAttributes(c, "die", attributes)
+		daemon.updateHealthMonitor(c)
 		return c.ToDisk()
 	case libcontainerd.StateExitProcess:
 		c.Lock()
@@ -71,18 +77,24 @@ func (daemon *Daemon) StateChanged(id string, e libcontainerd.StateInfo) error {
 			logrus.Warnf("Ignoring StateExitProcess for %v but no exec command found", e)
 		}
 	case libcontainerd.StateStart, libcontainerd.StateRestore:
+		// Container is already locked in this case
 		c.SetRunning(int(e.Pid), e.State == libcontainerd.StateStart)
 		c.HasBeenManuallyStopped = false
 		if err := c.ToDisk(); err != nil {
 			c.Reset(false)
 			return err
 		}
+		daemon.initHealthMonitor(c)
 		daemon.LogContainerEvent(c, "start")
 	case libcontainerd.StatePause:
+		// Container is already locked in this case
 		c.Paused = true
+		daemon.updateHealthMonitor(c)
 		daemon.LogContainerEvent(c, "pause")
 	case libcontainerd.StateResume:
+		// Container is already locked in this case
 		c.Paused = false
+		daemon.updateHealthMonitor(c)
 		daemon.LogContainerEvent(c, "unpause")
 	}
 
@@ -107,6 +119,23 @@ func (daemon *Daemon) AttachStreams(id string, iop libcontainerd.IOPipe) error {
 		}
 	}
 
+	copyFunc := func(w io.Writer, r io.Reader) {
+		s.Add(1)
+		go func() {
+			if _, err := io.Copy(w, r); err != nil {
+				logrus.Errorf("%v stream copy error: %v", id, err)
+			}
+			s.Done()
+		}()
+	}
+
+	if iop.Stdout != nil {
+		copyFunc(s.Stdout(), iop.Stdout)
+	}
+	if iop.Stderr != nil {
+		copyFunc(s.Stderr(), iop.Stderr)
+	}
+
 	if stdin := s.Stdin(); stdin != nil {
 		if iop.Stdin != nil {
 			go func() {
@@ -121,23 +150,6 @@ func (daemon *Daemon) AttachStreams(id string, iop libcontainerd.IOPipe) error {
 				iop.Stdin.Close()
 			}
 		}
-	}
-
-	copy := func(w io.Writer, r io.Reader) {
-		s.Add(1)
-		go func() {
-			if _, err := io.Copy(w, r); err != nil {
-				logrus.Errorf("%v stream copy error: %v", id, err)
-			}
-			s.Done()
-		}()
-	}
-
-	if iop.Stdout != nil {
-		copy(s.Stdout(), iop.Stdout)
-	}
-	if iop.Stderr != nil {
-		copy(s.Stderr(), iop.Stderr)
 	}
 
 	return nil
