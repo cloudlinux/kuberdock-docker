@@ -121,6 +121,75 @@ func (s *DockerSuite) TestImagesFilterLabelWithCommit(c *check.C) {
 	c.Assert(out, check.Equals, imageID)
 }
 
+func (s *DockerSuite) TestImagesFilterSinceAndBefore(c *check.C) {
+	imageID1, err := buildImage("image:1", `FROM `+minimalBaseImage()+`
+LABEL number=1`, true)
+	c.Assert(err, checker.IsNil)
+	imageID2, err := buildImage("image:2", `FROM `+minimalBaseImage()+`
+LABEL number=2`, true)
+	c.Assert(err, checker.IsNil)
+	imageID3, err := buildImage("image:3", `FROM `+minimalBaseImage()+`
+LABEL number=3`, true)
+	c.Assert(err, checker.IsNil)
+
+	expected := []string{imageID3, imageID2}
+
+	out, _ := dockerCmd(c, "images", "-f", "since=image:1", "image")
+	c.Assert(assertImageList(out, expected), checker.Equals, true, check.Commentf("SINCE filter: Image list is not in the correct order: %v\n%s", expected, out))
+
+	out, _ = dockerCmd(c, "images", "-f", "since="+imageID1, "image")
+	c.Assert(assertImageList(out, expected), checker.Equals, true, check.Commentf("SINCE filter: Image list is not in the correct order: %v\n%s", expected, out))
+
+	expected = []string{imageID3}
+
+	out, _ = dockerCmd(c, "images", "-f", "since=image:2", "image")
+	c.Assert(assertImageList(out, expected), checker.Equals, true, check.Commentf("SINCE filter: Image list is not in the correct order: %v\n%s", expected, out))
+
+	out, _ = dockerCmd(c, "images", "-f", "since="+imageID2, "image")
+	c.Assert(assertImageList(out, expected), checker.Equals, true, check.Commentf("SINCE filter: Image list is not in the correct order: %v\n%s", expected, out))
+
+	expected = []string{imageID2, imageID1}
+
+	out, _ = dockerCmd(c, "images", "-f", "before=image:3", "image")
+	c.Assert(assertImageList(out, expected), checker.Equals, true, check.Commentf("BEFORE filter: Image list is not in the correct order: %v\n%s", expected, out))
+
+	out, _ = dockerCmd(c, "images", "-f", "before="+imageID3, "image")
+	c.Assert(assertImageList(out, expected), checker.Equals, true, check.Commentf("BEFORE filter: Image list is not in the correct order: %v\n%s", expected, out))
+
+	expected = []string{imageID1}
+
+	out, _ = dockerCmd(c, "images", "-f", "before=image:2", "image")
+	c.Assert(assertImageList(out, expected), checker.Equals, true, check.Commentf("BEFORE filter: Image list is not in the correct order: %v\n%s", expected, out))
+
+	out, _ = dockerCmd(c, "images", "-f", "before="+imageID2, "image")
+	c.Assert(assertImageList(out, expected), checker.Equals, true, check.Commentf("BEFORE filter: Image list is not in the correct order: %v\n%s", expected, out))
+}
+
+func assertImageList(out string, expected []string) bool {
+	lines := strings.Split(strings.Trim(out, "\n "), "\n")
+
+	if len(lines)-1 != len(expected) {
+		return false
+	}
+
+	imageIDIndex := strings.Index(lines[0], "IMAGE ID")
+	for i := 0; i < len(expected); i++ {
+		imageID := lines[i+1][imageIDIndex : imageIDIndex+12]
+		found := false
+		for _, e := range expected {
+			if imageID == e[7:19] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	return true
+}
+
 func (s *DockerSuite) TestImagesFilterSpaceTrimCase(c *check.C) {
 	testRequires(c, DaemonIsLinux)
 	imageName := "images_filter_test"
@@ -171,7 +240,7 @@ func (s *DockerSuite) TestImagesEnsureDanglingImageOnlyListedOnce(c *check.C) {
 	imageID := stringid.TruncateID(strings.TrimSpace(out))
 
 	// overwrite the tag, making the previous image dangling
-	dockerCmd(c, "tag", "-f", "busybox", "foobox")
+	dockerCmd(c, "tag", "busybox", "foobox")
 
 	out, _ = dockerCmd(c, "images", "-q", "-f", "dangling=true")
 	// Expect one dangling image
@@ -287,4 +356,59 @@ func (s *DockerSuite) TestImagesFormatDefaultFormat(c *check.C) {
 
 	out, _ = dockerCmd(c, "--config", d, "images", "-q", "myimage")
 	c.Assert(out, checker.Equals, imageID+"\n", check.Commentf("Expected to print only the image id, got %v\n", out))
+}
+
+func (s *DockerDaemonSuite) doTestImagesWithAdditionalRegistry(c *check.C, publicBlocked bool) {
+	daemonArgs := []string{"--add-registry=example.com"}
+	if publicBlocked {
+		daemonArgs = append(daemonArgs, "--block-registry=public")
+	}
+	if err := s.d.StartWithBusybox(daemonArgs...); err != nil {
+		c.Fatalf("we should have been able to start the daemon with passing { %s } flags: %v", strings.Join(daemonArgs, ", "), err)
+	}
+
+	if out, err := s.d.Cmd("tag", "busybox", "example.com/busybox"); err != nil {
+		c.Fatalf("failed to tag image %s: error %v, output %q", "busybox", err, out)
+	}
+	if out, err := s.d.Cmd("tag", "busybox", "docker.io/busybox"); err != nil {
+		c.Fatalf("failed to tag image %s: error %v, output %q", "busybox", err, out)
+	}
+	if out, err := s.d.Cmd("tag", "busybox", "other.com/busybox"); err != nil {
+		c.Fatalf("failed to tag image %s: error %v, output %q", "busybox", err, out)
+	}
+
+	expected := []string{"busybox:latest", "example.com/busybox:latest"}
+	if !publicBlocked {
+		expected = append(expected, "docker.io/busybox:latest")
+	}
+	images := s.d.getImages(c, "*box")
+	if len(images) != len(expected) {
+		c.Errorf("got     : %v", images)
+		c.Errorf("expected: %v", expected)
+		c.Fatalf("got unexpected number of images (%d), expected: %d, images: %v", len(images), len(expected), images)
+	}
+	for _, exp := range expected {
+		if _, ok := images[exp]; !ok {
+			c.Errorf("expected image name %s, not found among images: %v", exp, images)
+		}
+	}
+
+	expected = []string{"docker.io/busybox:latest", "example.com/busybox:latest", "other.com/busybox:latest"}
+	images = s.d.getImages(c, "*/*box")
+	if len(images) != len(expected) {
+		c.Fatalf("got unexpected number of images (%d), expected: %d, images: %v", len(images), len(expected), images)
+	}
+	for _, exp := range expected {
+		if _, ok := images[exp]; !ok {
+			c.Errorf("expected image name %s, not found among images: %v", exp, images)
+		}
+	}
+}
+
+func (s *DockerDaemonSuite) TestImagesWithAdditionalRegistry(c *check.C) {
+	s.doTestImagesWithAdditionalRegistry(c, false)
+}
+
+func (s *DockerDaemonSuite) TestImagesWithPublicRegistryBlocked(c *check.C) {
+	s.doTestImagesWithAdditionalRegistry(c, true)
 }

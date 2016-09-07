@@ -10,11 +10,14 @@ parent = "smn_cli"
 
 # pause
 
-    Usage: docker pause [OPTIONS] CONTAINER [CONTAINER...]
+```markdown
+Usage:  docker pause CONTAINER [CONTAINER...]
 
-    Pause all processes within a container
+Pause all processes within one or more containers
 
-      --help          Print usage
+Options:
+      --help   Print usage
+```
 
 The `docker pause` command uses the cgroups freezer to suspend all processes in
 a container. Traditionally, when suspending a process the `SIGSTOP` signal is
@@ -23,5 +26,5 @@ the process is unaware, and unable to capture, that it is being suspended,
 and subsequently resumed.
 
 See the
-[cgroups freezer documentation](https://www.kernel.org/doc/Documentation/cgroups/freezer-subsystem.txt)
+[cgroups freezer documentation](https://www.kernel.org/doc/Documentation/cgroup-v1/freezer-subsystem.txt)
 for further details.

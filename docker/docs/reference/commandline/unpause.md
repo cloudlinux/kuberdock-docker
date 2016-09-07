@@ -10,15 +10,18 @@ parent = "smn_cli"
 
 # unpause
 
-    Usage: docker unpause [OPTIONS] CONTAINER [CONTAINER...]
+```markdown
+Usage:  docker unpause CONTAINER [CONTAINER...]
 
-    Unpause all processes within a container
+Unpause all processes within one or more containers
 
-      --help          Print usage
+Options:
+      --help   Print usage
+```
 
 The `docker unpause` command uses the cgroups freezer to un-suspend all
 processes in a container.
 
 See the
-[cgroups freezer documentation](https://www.kernel.org/doc/Documentation/cgroups/freezer-subsystem.txt)
+[cgroups freezer documentation](https://www.kernel.org/doc/Documentation/cgroup-v1/freezer-subsystem.txt)
 for further details.

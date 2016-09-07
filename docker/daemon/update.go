@@ -2,16 +2,15 @@ package daemon
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/docker/engine-api/types/container"
 )
 
 // ContainerUpdate updates configuration of the container
-func (daemon *Daemon) ContainerUpdate(name string, hostConfig *container.HostConfig) ([]string, error) {
+func (daemon *Daemon) ContainerUpdate(name string, hostConfig *container.HostConfig, validateHostname bool) ([]string, error) {
 	var warnings []string
 
-	warnings, err := daemon.verifyContainerSettings(hostConfig, nil, true)
+	warnings, err := daemon.verifyContainerSettings(hostConfig, nil, true, validateHostname)
 	if err != nil {
 		return warnings, err
 	}
@@ -73,11 +72,6 @@ func (daemon *Daemon) update(name string, hostConfig *container.HostConfig) erro
 
 	// if Restart Policy changed, we need to update container monitor
 	container.UpdateMonitor(hostConfig.RestartPolicy)
-
-	// if container is restarting, wait 5 seconds until it's running
-	if container.IsRestarting() {
-		container.WaitRunning(5 * time.Second)
-	}
 
 	// If container is not running, update hostConfig struct is enough,
 	// resources will be updated when the container is started again.
