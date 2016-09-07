@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/docker/docker/utils"
 	"github.com/docker/docker/volume"
 	containertypes "github.com/docker/engine-api/types/container"
 )
@@ -30,8 +31,10 @@ type ExitStatus struct {
 
 // CreateDaemonEnvironment creates a new environment variable slice for this container.
 func (container *Container) CreateDaemonEnvironment(linkedEnv []string) []string {
-	// On Windows, nothing to link. Just return the container environment.
-	return container.Config.Env
+	// because the env on the container can override certain default values
+	// we need to replace the 'env' keys where they match and append anything
+	// else.
+	return utils.ReplaceOrAppendEnvValues(linkedEnv, container.Config.Env)
 }
 
 // UnmountIpcMounts unmount Ipc related mounts.
@@ -51,7 +54,8 @@ func (container *Container) UnmountVolumes(forceSyscall bool, volumeEventLog fun
 
 // TmpfsMounts returns the list of tmpfs mounts
 func (container *Container) TmpfsMounts() []Mount {
-	return nil
+	var mounts []Mount
+	return mounts
 }
 
 // UpdateContainer updates configuration of a container
@@ -71,6 +75,11 @@ func (container *Container) UpdateContainer(hostConfig *containertypes.HostConfi
 		container.HostConfig.RestartPolicy = hostConfig.RestartPolicy
 	}
 	return nil
+}
+
+// SecretMount returns the Secret Mount point
+func (container *Container) SecretMount(rootUID, rootGID int) (*Mount, error) {
+	return nil, nil
 }
 
 // appendNetworkMounts appends any network mounts to the array of mount points passed in.

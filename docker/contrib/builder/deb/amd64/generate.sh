@@ -41,6 +41,22 @@ for version in "${versions[@]}"; do
 
 	echo >> "$version/Dockerfile"
 
+	if [ "$distro" = "debian" ]; then
+		cat >> "$version/Dockerfile" <<-'EOF'
+			# allow replacing httpredir mirror
+			ARG APT_MIRROR=httpredir.debian.org
+			RUN sed -i s/httpredir.debian.org/$APT_MIRROR/g /etc/apt/sources.list
+		EOF
+
+		if [ "$suite" = "wheezy" ]; then
+			cat >> "$version/Dockerfile" <<-'EOF'
+				RUN sed -i s/httpredir.debian.org/$APT_MIRROR/g /etc/apt/sources.list.d/backports.list
+			EOF
+		fi
+
+		echo "" >> "$version/Dockerfile"
+	fi
+
 	extraBuildTags='pkcs11'
 	runcBuildTags=
 
@@ -56,6 +72,7 @@ for version in "${versions[@]}"; do
 		dh-systemd # for systemd debhelper integration
 		git # for "git commit" info in "docker -v"
 		libapparmor-dev # for "sys/apparmor.h"
+		libaudit-dev # for "libaudit.h" and libaudit.so
 		libdevmapper-dev # for "libdevmapper.h"
 		libltdl-dev # for pkcs11 "ltdl.h"
 		libseccomp-dev  # for "seccomp.h" & "libseccomp.so"

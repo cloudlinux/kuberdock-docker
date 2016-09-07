@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/distribution/metadata"
@@ -23,15 +24,15 @@ import (
 type ImagePushConfig struct {
 	// MetaHeaders store HTTP headers with metadata about the image
 	MetaHeaders map[string][]string
-	// AuthConfig holds authentication credentials for authenticating with
-	// the registry.
-	AuthConfig *types.AuthConfig
+	// AuthConfigs holds authentication credentials for authenticating with
+	// the registries.
+	AuthConfigs map[string]types.AuthConfig
 	// ProgressOutput is the interface for showing the status of the push
 	// operation.
 	ProgressOutput progress.Output
 	// RegistryService is the registry service to use for TLS configuration
 	// and endpoint lookup.
-	RegistryService *registry.Service
+	RegistryService registry.Service
 	// ImageEventLogger notifies events for a given image
 	ImageEventLogger func(id, name, action string)
 	// MetadataStore is the storage backend for distribution-specific
@@ -48,6 +49,8 @@ type ImagePushConfig struct {
 	TrustKey libtrust.PrivateKey
 	// UploadManager dispatches uploads.
 	UploadManager *xfer.LayerUploadManager
+	// SkipSchemaV2 skips pushing manifests schema 2 but only push schema 1
+	SkipSchemaV2 bool
 }
 
 // Pusher is an interface that abstracts pushing for different API versions.
@@ -88,7 +91,7 @@ func NewPusher(ref reference.Named, endpoint registry.APIEndpoint, repoInfo *reg
 	return nil, fmt.Errorf("unknown version %d for registry %s", endpoint.Version, endpoint.URL)
 }
 
-// Push initiates a push operation on the repository named localName.
+// Push initiates a push operation on ref.
 // ref is the specific variant of the image to be pushed.
 // If no tag is provided, all tags will be pushed.
 func Push(ctx context.Context, ref reference.Named, imagePushConfig *ImagePushConfig) error {
@@ -100,6 +103,20 @@ func Push(ctx context.Context, ref reference.Named, imagePushConfig *ImagePushCo
 		return err
 	}
 
+	// If we're not using a custom registry, we know the restrictions
+	// applied to repository names and can warn the user in advance.
+	// Custom repositories can have different rules, and we must also
+	// allow pushing by image ID.
+	if repoInfo.Official {
+		authConfig := registry.ResolveAuthConfig(imagePushConfig.AuthConfigs, repoInfo.Index)
+		username := authConfig.Username
+		if username == "" {
+			username = "<user>"
+		}
+		name := strings.TrimPrefix(repoInfo.RemoteName(), reference.DefaultRepoPrefix)
+		return fmt.Errorf("You cannot push a \"root\" repository. Please rename your repository to %s/<user>/<repo> (ex: %s/%s/%s)", registry.IndexName, registry.IndexName, username, name)
+	}
+
 	endpoints, err := imagePushConfig.RegistryService.LookupPushEndpoints(repoInfo.Hostname())
 	if err != nil {
 		return err
@@ -107,9 +124,9 @@ func Push(ctx context.Context, ref reference.Named, imagePushConfig *ImagePushCo
 
 	progress.Messagef(imagePushConfig.ProgressOutput, "", "The push refers to a repository [%s]", repoInfo.FullName())
 
-	associations := imagePushConfig.ReferenceStore.ReferencesByName(repoInfo)
+	associations := imagePushConfig.ReferenceStore.ReferencesByName(ref)
 	if len(associations) == 0 {
-		return fmt.Errorf("Repository does not exist: %s", repoInfo.Name())
+		return fmt.Errorf("An image does not exist locally with the tag: %s", repoInfo.Name())
 	}
 
 	var (

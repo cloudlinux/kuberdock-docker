@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/docker/docker/cliconfig"
 	"github.com/docker/docker/pkg/reexec"
+	"github.com/docker/engine-api/types/swarm"
 	"github.com/go-check/check"
 )
 
@@ -79,7 +81,7 @@ type DockerSchema1RegistrySuite struct {
 }
 
 func (s *DockerSchema1RegistrySuite) SetUpTest(c *check.C) {
-	testRequires(c, DaemonIsLinux, RegistryHosting)
+	testRequires(c, DaemonIsLinux, RegistryHosting, NotArm64)
 	s.reg = setupRegistry(c, true, "", "")
 	s.d = NewDaemon(c)
 }
@@ -184,6 +186,71 @@ func (s *DockerDaemonSuite) TearDownTest(c *check.C) {
 	s.ds.TearDownTest(c)
 }
 
+const defaultSwarmPort = 2477
+
+func init() {
+	check.Suite(&DockerSwarmSuite{
+		ds: &DockerSuite{},
+	})
+}
+
+type DockerSwarmSuite struct {
+	ds          *DockerSuite
+	daemons     []*SwarmDaemon
+	daemonsLock sync.Mutex // protect access to daemons
+	portIndex   int
+}
+
+func (s *DockerSwarmSuite) SetUpTest(c *check.C) {
+	testRequires(c, DaemonIsLinux)
+}
+
+func (s *DockerSwarmSuite) AddDaemon(c *check.C, joinSwarm, manager bool) *SwarmDaemon {
+	d := &SwarmDaemon{
+		Daemon: NewDaemon(c),
+		port:   defaultSwarmPort + s.portIndex,
+	}
+	d.listenAddr = fmt.Sprintf("0.0.0.0:%d", d.port)
+	err := d.StartWithBusybox("--iptables=false", "--swarm-default-advertise-addr=lo") // avoid networking conflicts
+	c.Assert(err, check.IsNil)
+
+	if joinSwarm == true {
+		if len(s.daemons) > 0 {
+			tokens := s.daemons[0].joinTokens(c)
+			token := tokens.Worker
+			if manager {
+				token = tokens.Manager
+			}
+			c.Assert(d.Join(swarm.JoinRequest{
+				RemoteAddrs: []string{s.daemons[0].listenAddr},
+				JoinToken:   token,
+			}), check.IsNil)
+		} else {
+			c.Assert(d.Init(swarm.InitRequest{}), check.IsNil)
+		}
+	}
+
+	s.portIndex++
+	s.daemonsLock.Lock()
+	s.daemons = append(s.daemons, d)
+	s.daemonsLock.Unlock()
+
+	return d
+}
+
+func (s *DockerSwarmSuite) TearDownTest(c *check.C) {
+	testRequires(c, DaemonIsLinux)
+	s.daemonsLock.Lock()
+	for _, d := range s.daemons {
+		d.Stop()
+	}
+	s.daemons = nil
+	s.daemonsLock.Unlock()
+
+	s.portIndex = 0
+	s.ds.TearDownTest(c)
+}
+
 func init() {
 	check.Suite(&DockerTrustSuite{
 		ds: &DockerSuite{},
@@ -213,4 +280,43 @@ func (s *DockerTrustSuite) TearDownTest(c *check.C) {
 	// Remove trusted keys and metadata after test
 	os.RemoveAll(filepath.Join(cliconfig.ConfigDir(), "trust"))
 	s.ds.TearDownTest(c)
+}
+
+type DockerRegistriesSuite struct {
+	ds          *DockerSuite
+	reg1        *testRegistryV2
+	reg2        *testRegistryV2
+	regWithAuth *testRegistryV2
+	d           *Daemon
+}
+
+func (s *DockerRegistriesSuite) SetUpTest(c *check.C) {
+	s.reg1 = setupRegistryAt(c, privateRegistryURL, false, "", "")
+	s.reg2 = setupRegistryAt(c, privateRegistryURL2, false, "", "")
+	s.regWithAuth = setupRegistryAt(c, privateRegistryURL3, false, "htpasswd", "")
+	s.d = NewDaemon(c)
+}
+
+func (s *DockerRegistriesSuite) TearDownTest(c *check.C) {
+	if s.reg1 != nil {
+		s.reg1.Close()
+	}
+	if s.reg2 != nil {
+		s.reg2.Close()
+	}
+	if s.regWithAuth != nil {
+		out, err := s.d.Cmd("logout", s.regWithAuth.url)
+		c.Assert(err, check.IsNil, check.Commentf(out))
+		s.regWithAuth.Close()
+	}
+	if s.d != nil {
+		s.d.Stop()
+	}
+	s.ds.TearDownTest(c)
+}
+
+func init() {
+	check.Suite(&DockerRegistriesSuite{
+		ds: &DockerSuite{},
+	})
 }

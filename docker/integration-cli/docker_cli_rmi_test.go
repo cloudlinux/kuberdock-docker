@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -13,14 +14,34 @@ import (
 
 func (s *DockerSuite) TestRmiWithContainerFails(c *check.C) {
 	errSubstr := "is using it"
+	imageName := regexp.MustCompile(`(?m)^([^/ ]+/busybox)\s+`)
+
+	// remove any fully-qualified busybox images created by prior tests
+	out, _, err := runCommandWithOutput(exec.Command(dockerBinary, "images"))
+	if err != nil {
+		c.Fatalf("failed to list images: %v", err)
+	}
+	args := []string{"rmi", "-f"}
+	for _, name := range imageName.FindAllStringSubmatch(out, -1) {
+		args = append(args, name[1])
+	}
+	if len(args) > 2 {
+		rmiCmd := exec.Command(dockerBinary, args...)
+		if out, _, err = runCommandWithOutput(rmiCmd); err != nil {
+			c.Errorf("failed to remove all fully-qualified busybox images: %s, %v", out, err)
+		}
+	}
 
 	// create a container
-	out, _ := dockerCmd(c, "run", "-d", "busybox", "true")
+	out, _, err = dockerCmdWithError("run", "-d", "busybox", "true")
+	if err != nil {
+		c.Fatalf("failed to create a container: %s, %v", out, err)
+	}
 
 	cleanedContainerID := strings.TrimSpace(out)
 
 	// try to delete the image
-	out, _, err := dockerCmdWithError("rmi", "busybox")
+	out, _, err = dockerCmdWithError("rmi", "busybox")
 	// Container is using image, should not be able to rmi
 	c.Assert(err, checker.NotNil)
 	// Container is using image, error message should contain errSubstr
@@ -226,18 +247,11 @@ func (s *DockerSuite) TestRmiForceWithMultipleRepositories(c *check.C) {
 }
 
 func (s *DockerSuite) TestRmiBlank(c *check.C) {
-	// try to delete a blank image name
-	out, _, err := dockerCmdWithError("rmi", "")
-	// Should have failed to delete '' image
+	out, _, err := dockerCmdWithError("rmi", " ")
+	// Should have failed to delete ' ' image
 	c.Assert(err, checker.NotNil)
 	// Wrong error message generated
 	c.Assert(out, checker.Not(checker.Contains), "no such id", check.Commentf("out: %s", out))
-	// Expected error message not generated
-	c.Assert(out, checker.Contains, "image name cannot be blank", check.Commentf("out: %s", out))
-
-	out, _, err = dockerCmdWithError("rmi", " ")
-	// Should have failed to delete ' ' image
-	c.Assert(err, checker.NotNil)
 	// Expected error message not generated
 	c.Assert(out, checker.Contains, "image name cannot be blank", check.Commentf("out: %s", out))
 }
@@ -270,7 +284,7 @@ func (s *DockerSuite) TestRmiContainerImageNotFound(c *check.C) {
 // #13422
 func (s *DockerSuite) TestRmiUntagHistoryLayer(c *check.C) {
 	image := "tmp1"
-	// Build a image for testing.
+	// Build an image for testing.
 	dockerfile := `FROM busybox
 MAINTAINER foo
 RUN echo 0 #layer0
@@ -324,10 +338,6 @@ func (*DockerSuite) TestRmiParentImageFail(c *check.C) {
 }
 
 func (s *DockerSuite) TestRmiWithParentInUse(c *check.C) {
-	// TODO Windows. There is a bug either in Windows TP4, or the TP4 compatible
-	// docker which means this test fails. It has been verified to have been fixed
-	// in TP5 and docker/master, hence enable it once CI switch to TP5.
-	testRequires(c, DaemonIsLinux)
 	out, _ := dockerCmd(c, "create", "busybox")
 	cID := strings.TrimSpace(out)
 
@@ -345,10 +355,6 @@ func (s *DockerSuite) TestRmiWithParentInUse(c *check.C) {
 
 // #18873
 func (s *DockerSuite) TestRmiByIDHardConflict(c *check.C) {
-	// TODO Windows CI. This will work on a TP5 compatible docker which
-	// has content addressibility fixes. Do not run this on TP4 as it
-	// will end up deleting the busybox image causing subsequent tests to fail.
-	testRequires(c, DaemonIsLinux)
 	dockerCmd(c, "create", "busybox")
 
 	imgID := inspectField(c, "busybox:latest", "Id")

@@ -44,3 +44,8 @@ func ValidateIsolation(hc *container.HostConfig) error {
 	}
 	return nil
 }
+
+// ValidateQoS performs platform specific validation of the Qos settings
+func ValidateQoS(hc *container.HostConfig) error {
+	return nil
+}
