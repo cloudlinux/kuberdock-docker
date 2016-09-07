@@ -27,6 +27,7 @@ docker-build - Build a new image from the source code at PATH
 [**--cpuset-cpus**[=*CPUSET-CPUS*]]
 [**--cpuset-mems**[=*CPUSET-MEMS*]]
 [**--ulimit**[=*[]*]]
+[**-v**|**--volume**[=*[]*]]
 PATH | URL | -
 
 # DESCRIPTION
@@ -91,7 +92,9 @@ set as the **URL**, the repository is cloned locally and then sent as the contex
    Remove intermediate containers after a successful build. The default is *true*.
 
 **-t**, **--tag**=""
-   Repository names (and optionally with tags) to be applied to the resulting image in case of success.
+   Repository names (and optionally with tags) to be applied to the resulting 
+   image in case of success. Refer to **docker-tag(1)** for more information
+   about valid tag names.
 
 **-m**, **--memory**=*MEMORY*
   Memory limit
@@ -196,6 +199,12 @@ Cgroups are created if they do not already exist.
 **--ulimit**=[]
   Ulimit options
 
++**-v**, **--volume**=[] Create a bind mount
++   (format: `host-dir:container-dir[:<suffix options>]`, where suffix options
++are comma delimited and selected from [ro] and [z|Z].). Read-write mode isn't supported at build time.
++In case rw is specified a warning is printed during the build and it will be changed to ro preserving any SELinux mode provided.
++
+
   For more information about `ulimit` see [Setting ulimits in a 
 container](https://docs.docker.com/reference/commandline/run/#setting-ulimits-in-a-container)
 
@@ -277,7 +286,7 @@ repository.
 
     docker build github.com/scollier/purpletest
 
-Note: You can set an arbitrary Git repository via the `git://` schema.
+Note: You can set an arbitrary Git repository via the `git://` scheme.
 
 ## Building an image using a URL to a tarball'ed context
 

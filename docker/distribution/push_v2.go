@@ -61,7 +61,12 @@ type pushState struct {
 func (p *v2Pusher) Push(ctx context.Context) (err error) {
 	p.pushState.remoteLayers = make(map[layer.DiffID]distribution.Descriptor)
 
-	p.repo, p.pushState.confirmedV2, err = NewV2Repository(ctx, p.repoInfo, p.endpoint, p.config.MetaHeaders, p.config.AuthConfig, "push", "pull")
+	repoInfo, err := registry.ParseRepositoryInfo(p.ref)
+	if err != nil {
+		return err
+	}
+	authConfig := registry.ResolveAuthConfig(p.config.AuthConfigs, repoInfo.Index)
+	p.repo, p.pushState.confirmedV2, err = NewV2Repository(ctx, p.repoInfo, p.endpoint, p.config.MetaHeaders, &authConfig, "push", "pull")
 	if err != nil {
 		logrus.Debugf("Error getting v2 registry: %v", err)
 		return err
@@ -137,6 +142,7 @@ func (p *v2Pusher) pushV2Tag(ctx context.Context, ref reference.NamedTagged, ima
 	descriptorTemplate := v2PushDescriptor{
 		v2MetadataService: p.v2MetadataService,
 		repoInfo:          p.repoInfo,
+		ref:               p.ref,
 		repo:              p.repo,
 		pushState:         &p.pushState,
 	}
@@ -154,34 +160,50 @@ func (p *v2Pusher) pushV2Tag(ctx context.Context, ref reference.NamedTagged, ima
 		return err
 	}
 
-	// Try schema2 first
-	builder := schema2.NewManifestBuilder(p.repo.Blobs(ctx), img.RawJSON())
-	manifest, err := manifestFromBuilder(ctx, builder, descriptors)
-	if err != nil {
-		return err
-	}
-
 	manSvc, err := p.repo.Manifests(ctx)
 	if err != nil {
 		return err
 	}
 
-	putOptions := []distribution.ManifestServiceOption{distribution.WithTag(ref.Tag())}
-	if _, err = manSvc.Put(ctx, manifest, putOptions...); err != nil {
-		logrus.Warnf("failed to upload schema2 manifest: %v - falling back to schema1", err)
-
+	var (
+		manifest   distribution.Manifest
+		putOptions = []distribution.ManifestServiceOption{distribution.WithTag(ref.Tag())}
+	)
+	if p.config.SkipSchemaV2 {
 		manifestRef, err := distreference.WithTag(p.repo.Named(), ref.Tag())
 		if err != nil {
 			return err
 		}
-		builder = schema1.NewConfigManifestBuilder(p.repo.Blobs(ctx), p.config.TrustKey, manifestRef, img.RawJSON())
+		builder := schema1.NewConfigManifestBuilder(p.repo.Blobs(ctx), p.config.TrustKey, manifestRef, img.RawJSON())
 		manifest, err = manifestFromBuilder(ctx, builder, descriptors)
 		if err != nil {
 			return err
 		}
-
 		if _, err = manSvc.Put(ctx, manifest, putOptions...); err != nil {
 			return err
+		}
+	} else {
+		// Try schema2 first
+		builder := schema2.NewManifestBuilder(p.repo.Blobs(ctx), img.RawJSON())
+		manifest, err = manifestFromBuilder(ctx, builder, descriptors)
+		if err != nil {
+			return err
+		}
+		if _, err = manSvc.Put(ctx, manifest, putOptions...); err != nil {
+			logrus.Warnf("failed to upload schema2 manifest: %v - falling back to schema1", err)
+
+			manifestRef, err := distreference.WithTag(p.repo.Named(), ref.Tag())
+			if err != nil {
+				return err
+			}
+			builder = schema1.NewConfigManifestBuilder(p.repo.Blobs(ctx), p.config.TrustKey, manifestRef, img.RawJSON())
+			manifest, err = manifestFromBuilder(ctx, builder, descriptors)
+			if err != nil {
+				return err
+			}
+			if _, err = manSvc.Put(ctx, manifest, putOptions...); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -199,6 +221,11 @@ func (p *v2Pusher) pushV2Tag(ctx context.Context, ref reference.NamedTagged, ima
 
 	manifestDigest := digest.FromBytes(canonicalManifest)
 	progress.Messagef(p.config.ProgressOutput, "", "%s: digest: %s size: %d", ref.Tag(), manifestDigest, len(canonicalManifest))
+
+	if err := addDigestReference(p.config.ReferenceStore, ref, manifestDigest, imageID); err != nil {
+		return err
+	}
+
 	// Signal digest to the trust client so it can sign the
 	// push, if appropriate.
 	progress.Aux(p.config.ProgressOutput, PushResult{Tag: ref.Tag(), Digest: manifestDigest, Size: len(canonicalManifest)})
@@ -222,13 +249,14 @@ type v2PushDescriptor struct {
 	layer             layer.Layer
 	v2MetadataService *metadata.V2MetadataService
 	repoInfo          reference.Named
+	ref               reference.Named
 	repo              distribution.Repository
 	pushState         *pushState
 	remoteDescriptor  distribution.Descriptor
 }
 
 func (pd *v2PushDescriptor) Key() string {
-	return "v2push:" + pd.repo.Named().Name() + " " + pd.layer.DiffID().String()
+	return "v2push:" + pd.ref.FullName() + " " + pd.layer.DiffID().String()
 }
 
 func (pd *v2PushDescriptor) ID() string {
@@ -240,6 +268,13 @@ func (pd *v2PushDescriptor) DiffID() layer.DiffID {
 }
 
 func (pd *v2PushDescriptor) Upload(ctx context.Context, progressOutput progress.Output) (distribution.Descriptor, error) {
+	if fs, ok := pd.layer.(distribution.Describable); ok {
+		if d := fs.Descriptor(); len(d.URLs) > 0 {
+			progress.Update(progressOutput, pd.ID(), "Skipped foreign layer")
+			return d, nil
+		}
+	}
+
 	diffID := pd.DiffID()
 
 	pd.pushState.Lock()

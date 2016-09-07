@@ -5,7 +5,11 @@ import (
 	"net"
 	"sync"
 	"syscall"
+
+	log "github.com/Sirupsen/logrus"
 )
+
+const ovPeerTable = "overlay_peer_table"
 
 type peerKey struct {
 	peerIP  net.IP
@@ -86,7 +90,7 @@ func (d *driver) peerDbNetworkWalk(nid string, f func(*peerKey, *peerEntry) bool
 	for pKeyStr, pEntry := range pMap.mp {
 		var pKey peerKey
 		if _, err := fmt.Sscan(pKeyStr, &pKey); err != nil {
-			fmt.Printf("peer key scan failed: %v", err)
+			log.Warnf("Peer key scan on network %s failed: %v", nid, err)
 		}
 
 		if f(&pKey, &pEntry) {
@@ -164,14 +168,14 @@ func (d *driver) peerDbAdd(nid, eid string, peerIP net.IP, peerIPMask net.IPMask
 }
 
 func (d *driver) peerDbDelete(nid, eid string, peerIP net.IP, peerIPMask net.IPMask,
-	peerMac net.HardwareAddr, vtep net.IP) {
+	peerMac net.HardwareAddr, vtep net.IP) bool {
 	peerDbWg.Wait()
 
 	d.peerDb.Lock()
 	pMap, ok := d.peerDb.mp[nid]
 	if !ok {
 		d.peerDb.Unlock()
-		return
+		return false
 	}
 	d.peerDb.Unlock()
 
@@ -181,8 +185,20 @@ func (d *driver) peerDbDelete(nid, eid string, peerIP net.IP, peerIPMask net.IPM
 	}
 
 	pMap.Lock()
+
+	if pEntry, ok := pMap.mp[pKey.String()]; ok {
+		// Mismatched endpoint ID(possibly outdated). Do not
+		// delete peerdb
+		if pEntry.eid != eid {
+			pMap.Unlock()
+			return false
+		}
+	}
+
 	delete(pMap.mp, pKey.String())
 	pMap.Unlock()
+
+	return true
 }
 
 func (d *driver) peerDbUpdateSandbox(nid string) {
@@ -267,13 +283,17 @@ func (d *driver) peerAdd(nid, eid string, peerIP net.IP, peerIPMask net.IPMask,
 		return fmt.Errorf("couldn't get vxlan id for %q: %v", s.subnetIP.String(), err)
 	}
 
-	if err := n.joinSubnetSandbox(s); err != nil {
+	if err := n.joinSubnetSandbox(s, false); err != nil {
 		return fmt.Errorf("subnet sandbox join failed for %q: %v", s.subnetIP.String(), err)
+	}
+
+	if err := d.checkEncryption(nid, vtep, n.vxlanID(s), false, true); err != nil {
+		log.Warn(err)
 	}
 
 	// Add neighbor entry for the peer IP
 	if err := sbox.AddNeighbor(peerIP, peerMac, sbox.NeighborOptions().LinkName(s.vxlanName)); err != nil {
-		return fmt.Errorf("could not add neigbor entry into the sandbox: %v", err)
+		return fmt.Errorf("could not add neighbor entry into the sandbox: %v", err)
 	}
 
 	// Add fdb entry to the bridge for the peer mac
@@ -293,7 +313,9 @@ func (d *driver) peerDelete(nid, eid string, peerIP net.IP, peerIPMask net.IPMas
 	}
 
 	if updateDb {
-		d.peerDbDelete(nid, eid, peerIP, peerIPMask, peerMac, vtep)
+		if !d.peerDbDelete(nid, eid, peerIP, peerIPMask, peerMac, vtep) {
+			return nil
+		}
 	}
 
 	n := d.network(nid)
@@ -313,7 +335,11 @@ func (d *driver) peerDelete(nid, eid string, peerIP net.IP, peerIPMask net.IPMas
 
 	// Delete neighbor entry for the peer IP
 	if err := sbox.DeleteNeighbor(peerIP, peerMac); err != nil {
-		return fmt.Errorf("could not delete neigbor entry into the sandbox: %v", err)
+		return fmt.Errorf("could not delete neighbor entry into the sandbox: %v", err)
+	}
+
+	if err := d.checkEncryption(nid, vtep, 0, false, false); err != nil {
+		log.Warn(err)
 	}
 
 	return nil

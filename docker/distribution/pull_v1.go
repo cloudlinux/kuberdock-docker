@@ -57,7 +57,13 @@ func (p *v1Puller) Pull(ctx context.Context, ref reference.Named) error {
 		logrus.Debugf("Could not get v1 endpoint: %v", err)
 		return fallbackError{err: err}
 	}
-	p.session, err = registry.NewSession(client, p.config.AuthConfig, v1Endpoint)
+
+	repoInfo, err := registry.ParseRepositoryInfo(ref)
+	if err != nil {
+		return err
+	}
+	authConfig := registry.ResolveAuthConfig(p.config.AuthConfigs, repoInfo.Index)
+	p.session, err = registry.NewSession(client, &authConfig, v1Endpoint)
 	if err != nil {
 		// TODO(dmcgowan): Check if should fallback
 		logrus.Debugf("Fallback from error: %s", err)
@@ -75,18 +81,22 @@ func (p *v1Puller) Pull(ctx context.Context, ref reference.Named) error {
 func (p *v1Puller) pullRepository(ctx context.Context, ref reference.Named) error {
 	progress.Message(p.config.ProgressOutput, "", "Pulling repository "+p.repoInfo.FullName())
 
+	tagged, isTagged := ref.(reference.NamedTagged)
+
 	repoData, err := p.session.GetRepositoryData(p.repoInfo)
 	if err != nil {
 		if strings.Contains(err.Error(), "HTTP code: 404") {
+			if isTagged {
+				return fmt.Errorf("Error: image %s:%s not found", p.repoInfo.RemoteName(), tagged.Tag())
+			}
 			return fmt.Errorf("Error: image %s not found", p.repoInfo.RemoteName())
 		}
 		// Unexpected HTTP error
 		return err
 	}
 
-	logrus.Debugf("Retrieving the tag list")
+	logrus.Debug("Retrieving the tag list")
 	var tagsList map[string]string
-	tagged, isTagged := ref.(reference.NamedTagged)
 	if !isTagged {
 		tagsList, err = p.session.GetRemoteTags(repoData.Endpoints, p.repoInfo)
 	} else {
