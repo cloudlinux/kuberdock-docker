@@ -9,10 +9,13 @@
 %global project docker
 %global repo %{project}
 %global common_path %{provider}.%{provider_tld}/%{project}
-%global d_version 1.11.2
+%global d_version 1.12.1
 
 %global import_path %{common_path}/%{repo}
 %global import_path_libcontainer %{common_path}/libcontainer
+
+%global docker_commit f1040da127b7f1167ab351cb429ac5faa421c7cf
+%global docker_shortcommit %(c=%{docker_commit}; echo ${c:0:7})
 
 %global d_commit 9dea74f3a01d9a0b51ed6806c16af3e77a35a722
 %global d_shortcommit %(c=%{d_commit}; echo ${c:0:7})
@@ -32,16 +35,16 @@
 
 # %%{name}-storage-setup stuff (prefix with dss_ for version/release etc.)
 %global dss_libdir %{_prefix}/lib/%{name}-storage-setup
-%global dss_commit f087cb16d6751d29821494a86b9ff2f302ae9ea7
+%global dss_commit d642523c163820137c9ef07f4cbcb148c98aacf5
 %global dss_shortcommit %(c=%{dss_commit}; echo ${c:0:7})
 
-%global runc_commit e87436998478d222be209707503c27f6f91be0c5
+%global runc_commit f509e5094de84a919e2e8ae316373689fb66c513
 %global runc_shortcommit %(c=%{runc_commit}; echo ${c:0:7})
 
-%global containerd_commit d2f03861c91edaafdcb3961461bf82ae83785ed7
+%global containerd_commit 0ac3cd1be170d180b2baed755e8f0da547ceb267
 %global containerd_shortcommit %(c=%{containerd_commit}; echo ${c:0:7})
 
-%global migrator_commit 994c35cbf7ae094d4cb1230b85631ecedd77b0d8
+%global migrator_commit c417a6a022c5023c111662e8280f885f6ac259be
 %global migrator_shortcommit %(c=%{migrator_commit}; echo ${c:0:7})
 
 # Usage: _format var format
@@ -66,11 +69,8 @@ Release: 1%{?dist}
 Summary: Automates deployment of containerized applications
 License: ASL 2.0
 URL: https://%{import_path}
-# only x86_64 for now: https://%%{provider}.%%{provider_tld}/%%{name}/%%{name}/issues/136
 ExclusiveArch: x86_64
-# Branch used available at
-# https://%%{provider}.%%{provider_tld}/projectatomic/%%{name}/commits/rhel7-1.8
-Source0: %{name}-%{version}.tar.gz
+Source0: https://github.com/projectatomic/archive/%{docker_commit}/%{name}-%{docker_shortcommit}.tar.gz
 Source1: %{name}.service
 Source3: %{name}.sysconfig
 Source4: %{name}-storage.sysconfig
@@ -80,12 +80,11 @@ Source7: %{name}-network.sysconfig
 Source8: %{name}-containerd.service
 Source11: https://%{provider}.%{provider_tld}/vbatts/%{name}-utils/archive/%{repo}-utils-%{utils_shortcommit}.tar.gz
 Source12: https://%{provider}.%{provider_tld}/fedora-cloud/%{name}-selinux/archive/%{ds_commit}/%{name}-selinux-%{ds_commit}.zip
-Source13: https://%{provider}.%{provider_tld}/projectatomic/%{name}-storage-setup/archive/%{dss_commit}/%{name}-storage-setup-%{dss_shortcommit}.tar.gz
-Source14: https://%{provider}.%{provider_tld}/opencontainers/runc/runc-%{runc_shortcommit}.tar.gz
-Source15: https://%{provider}.%{provider_tld}/docker/containerd/containerd-%{containerd_shortcommit}.tar.gz
-Source16: https://%{provider}.%{provider_tld}/%{repo}/v1.10-migrator-%{migrator_shortcommit}.tar.gz
+Source13: https://%{provider}.%{provider_tld}/projectatomic/%{name}-storage-setup/archive/%{dss_commit}/%{name}-storage-setup-%{dss_commit}.zip
+Source14: https://%{provider}.%{provider_tld}/projectatomic/runc/runc-%{runc_commit}.zip
+Source15: https://%{provider}.%{provider_tld}/docker/containerd/containerd-%{containerd_commit}.zip
+Source16: https://%{provider}.%{provider_tld}/%{repo}/v1.10-migrator-%{migrator_commit}.zip
 
-Patch998: 0998-allow_selinux_overlayfs.patch
 Patch999: 0999-kuberdock-docker-selinux.patch
 
 BuildRequires: glibc-static
@@ -203,9 +202,8 @@ running and skip checksum calculation on startup.
 
 
 %prep
-%setup -q -a11 -a12 -a13 -a14 -a15 -a16
+%setup -q -n %{name}-%{docker_commit} -a11 -a12 -a13 -a14 -a15 -a16
 cp %{SOURCE6} .
-%patch998 -p1
 pushd %{name}-selinux-%{ds_commit}
 %patch999 -p1
 popd
@@ -215,17 +213,17 @@ popd
 mkdir _build
 
 pushd _build
-  mkdir -p src/%{provider}.%{provider_tld}/{%{name},vbatts}
+  mkdir -p src/%{provider}.%{provider_tld}/{%{repo},projectatomic,vbatts}
   ln -s $(dirs +1 -l) src/%{import_path}
   ln -s $(dirs +1 -l)/%{name}-utils-%{utils_commit} src/%{provider}.%{provider_tld}/vbatts/%{name}-utils
   ln -s $(dirs +1 -l)/containerd-%{containerd_commit} src/%{provider}.%{provider_tld}/docker/containerd
 popd
 
 export DOCKER_GITCOMMIT="%{d_shortcommit}/%{d_version}"
-export DOCKER_BUILDTAGS='selinux btrfs_noversion'
+export DOCKER_BUILDTAGS='selinux seccomp'
 export GOPATH=$(pwd)/_build:$(pwd)/vendor:%{gopath}
 
-DEBUG=1 bash -x hack/make.sh dynbinary
+IAMSTATIC=false DEBUG=1 bash -x hack/make.sh dynbinary
 man/md2man-all.sh
 cp contrib/syntax/vim/LICENSE LICENSE-vim-syntax
 cp contrib/syntax/vim/README.md README-vim-syntax.md
@@ -267,12 +265,21 @@ install -d %{buildroot}%{_libexecdir}/%{name}
 install -p -m 755 _build/src/%{name}-fetch %{buildroot}%{_bindir}
 install -p -m 755 _build/src/%{name}tarsum %{buildroot}%{_bindir}
 
+#for x in bundles/latest; do
+#    if ! test -d $x/dynbinary; then
+#    continue
+#    fi
+#    rm $x/dynbinary/*.md5 $x/dynbinary/*.sha256
+#    install -p -m 755 $x/dynbinary/%{repo}-%{version}* %{buildroot}%{_bindir}/%{repo}
+#    break
+#done
+
 for x in bundles/latest; do
-    if ! test -d $x/dynbinary; then
-    continue
+    if ! test -d $x/dynbinary-client; then
+        continue
     fi
-    rm $x/dynbinary/*.md5 $x/dynbinary/*.sha256
-    install -p -m 755 $x/dynbinary/%{repo}-%{version}* %{buildroot}%{_bindir}/%{repo}
+    rm $x/dynbinary-client/*.{md5,sha256}
+    install -p -m 755 $x/dynbinary-client/%{repo}-%{version}* %{buildroot}%{_bindir}/%{name}
     break
 done
 
@@ -499,6 +506,13 @@ exit 0
 
 
 %changelog
+* Wed Sep 07 2016 Sergey Fokin <sfokin@cloudlinux.com> - 1:1.12.1-1
+- update docker to 1.12.1 (f1040da127b7f1167ab351cb429ac5faa421c7cf)
+  update docker-storage-setup d642523c163820137c9ef07f4cbcb148c98aacf5
+  update runc f509e5094de84a919e2e8ae316373689fb66c513
+  update containerd 0ac3cd1be170d180b2baed755e8f0da547ceb267
+  update v1.10-migrator c417a6a022c5023c111662e8280f885f6ac259be
+
 * Thu Jun 02 2016 Maksym Lobur <mlobur@cloudlinux.com> - 1:1.11.2-1
 - update to 1.11.2
 

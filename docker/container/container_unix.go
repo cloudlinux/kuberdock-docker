@@ -12,6 +12,7 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/pkg/chrootarchive"
+	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/pkg/symlink"
 	"github.com/docker/docker/pkg/system"
 	"github.com/docker/docker/utils"
@@ -117,7 +118,9 @@ func (container *Container) NetworkMounts() []Mount {
 		if _, err := os.Stat(container.ResolvConfPath); err != nil {
 			logrus.Warnf("ResolvConfPath set to %q, but can't stat this filename (err = %v); skipping", container.ResolvConfPath, err)
 		} else {
-			label.Relabel(container.ResolvConfPath, container.MountLabel, shared)
+			if !container.HasMountFor("/etc/resolv.conf") {
+				label.Relabel(container.ResolvConfPath, container.MountLabel, shared)
+			}
 			writable := !container.HostConfig.ReadonlyRootfs
 			if m, exists := container.MountPoints["/etc/resolv.conf"]; exists {
 				writable = m.RW
@@ -134,7 +137,9 @@ func (container *Container) NetworkMounts() []Mount {
 		if _, err := os.Stat(container.HostnamePath); err != nil {
 			logrus.Warnf("HostnamePath set to %q, but can't stat this filename (err = %v); skipping", container.HostnamePath, err)
 		} else {
-			label.Relabel(container.HostnamePath, container.MountLabel, shared)
+			if !container.HasMountFor("/etc/hostname") {
+				label.Relabel(container.HostnamePath, container.MountLabel, shared)
+			}
 			writable := !container.HostConfig.ReadonlyRootfs
 			if m, exists := container.MountPoints["/etc/hostname"]; exists {
 				writable = m.RW
@@ -151,7 +156,9 @@ func (container *Container) NetworkMounts() []Mount {
 		if _, err := os.Stat(container.HostsPath); err != nil {
 			logrus.Warnf("HostsPath set to %q, but can't stat this filename (err = %v); skipping", container.HostsPath, err)
 		} else {
-			label.Relabel(container.HostsPath, container.MountLabel, shared)
+			if !container.HasMountFor("/etc/hosts") {
+				label.Relabel(container.HostsPath, container.MountLabel, shared)
+			}
 			writable := !container.HostConfig.ReadonlyRootfs
 			if m, exists := container.MountPoints["/etc/hosts"]; exists {
 				writable = m.RW
@@ -181,11 +188,17 @@ func (container *Container) CopyImagePathContent(v volume.Volume, destination st
 		return err
 	}
 
-	path, err := v.Mount()
+	id := stringid.GenerateNonCryptoID()
+	path, err := v.Mount(id)
 	if err != nil {
 		return err
 	}
-	defer v.Unmount()
+
+	defer func() {
+		if err := v.Unmount(id); err != nil {
+			logrus.Warnf("error while unmounting volume %s: %v", v.Name(), err)
+		}
+	}()
 	return copyExistingContents(rootfs, path)
 }
 
@@ -214,7 +227,7 @@ func (container *Container) UnmountIpcMounts(unmount func(pth string) error) {
 			logrus.Error(err)
 			warnings = append(warnings, err.Error())
 		} else if shmPath != "" {
-			if err := unmount(shmPath); err != nil {
+			if err := unmount(shmPath); err != nil && !os.IsNotExist(err) {
 				warnings = append(warnings, fmt.Sprintf("failed to umount %s: %v", shmPath, err))
 			}
 
@@ -312,7 +325,7 @@ func (container *Container) UnmountVolumes(forceSyscall bool, volumeEventLog fun
 			return err
 		}
 
-		volumeMounts = append(volumeMounts, volume.MountPoint{Destination: dest, Volume: mntPoint.Volume})
+		volumeMounts = append(volumeMounts, volume.MountPoint{Destination: dest, Volume: mntPoint.Volume, ID: mntPoint.ID})
 	}
 
 	// Append any network mounts to the list (this is a no-op on Windows)
@@ -328,9 +341,10 @@ func (container *Container) UnmountVolumes(forceSyscall bool, volumeEventLog fun
 		}
 
 		if volumeMount.Volume != nil {
-			if err := volumeMount.Volume.Unmount(); err != nil {
+			if err := volumeMount.Volume.Unmount(volumeMount.ID); err != nil {
 				return err
 			}
+			volumeMount.ID = ""
 
 			attributes := map[string]string{
 				"driver":    volumeMount.Volume.DriverName(),
@@ -402,4 +416,43 @@ func cleanResourcePath(path string) string {
 // can be mounted locally. A no-op on non-Windows platforms
 func (container *Container) canMountFS() bool {
 	return true
+}
+
+// SecretMount returns the Secret Mount point
+func (container *Container) SecretMount(rootUID, rootGID int) (*Mount, error) {
+	secretsPath, err := container.GetRootResourcePath("secrets")
+	if err != nil {
+		return nil, fmt.Errorf("GetSecretsPath failed: %v", err)
+	}
+
+	if err := os.RemoveAll(secretsPath); err != nil {
+		return nil, fmt.Errorf("RemoveSecretsPath failed: %v", err)
+	}
+
+	if err := os.MkdirAll(secretsPath, 0755); err != nil {
+		return nil, fmt.Errorf("MakeDirSecretsPath failed: %v", err)
+	}
+
+	data, err := getHostSecretData()
+	if err != nil {
+		return nil, fmt.Errorf("GetHostSecretData failed: %v", err)
+	}
+	for _, s := range data {
+		s.SaveTo(secretsPath)
+	}
+
+	if rootUID != 0 {
+		callback := func(p string, info os.FileInfo, err error) error {
+			return os.Chown(p, rootUID, rootGID)
+		}
+
+		filepath.Walk(secretsPath, callback)
+	}
+	label.Relabel(secretsPath, container.MountLabel, false)
+
+	m := &Mount{}
+	m.Source = secretsPath
+	m.Destination = "/run/secrets"
+	m.Writable = true
+	return m, nil
 }

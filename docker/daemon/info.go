@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"os"
+	"os/exec"
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/docker/docker/pkg/parsers/kernel"
 	"github.com/docker/docker/pkg/parsers/operatingsystem"
 	"github.com/docker/docker/pkg/platform"
+	"github.com/docker/docker/pkg/rpm"
 	"github.com/docker/docker/pkg/sysinfo"
 	"github.com/docker/docker/pkg/system"
 	"github.com/docker/docker/registry"
@@ -51,9 +53,18 @@ func (daemon *Daemon) SystemInfo() (*types.Info, error) {
 	meminfo, err := system.ReadMemInfo()
 	if err != nil {
 		logrus.Errorf("Could not read system memory info: %v", err)
+		meminfo = &system.MemInfo{}
 	}
 
 	sysInfo := sysinfo.New(true)
+	dockerPath, err := exec.LookPath("docker")
+	if err != nil {
+		logrus.Warnf("could not look docker binary path: %v", err)
+	}
+	packageVersion, err := rpm.Version(dockerPath)
+	if err != nil {
+		logrus.Warnf("could not retrieve docker rpm version: %v", err)
+	}
 
 	var cRunning, cPaused, cStopped int32
 	daemon.containers.ApplyAll(func(c *container.Container) {
@@ -66,6 +77,26 @@ func (daemon *Daemon) SystemInfo() (*types.Info, error) {
 			atomic.AddInt32(&cStopped, 1)
 		}
 	})
+
+	var securityOptions []string
+	if sysInfo.AppArmor {
+		securityOptions = append(securityOptions, "apparmor")
+	}
+	if sysInfo.Seccomp && supportsSeccomp {
+		securityOptions = append(securityOptions, "seccomp")
+	}
+	if selinuxEnabled() {
+		securityOptions = append(securityOptions, "selinux")
+	}
+
+	registries := []types.Registry{}
+	for _, r := range registry.DefaultRegistries {
+		registry := types.Registry{Name: r}
+		if ic, ok := daemon.RegistryService.ServiceConfig().IndexConfigs[r]; ok {
+			registry.Secure = ic.Secure
+		}
+		registries = append(registries, registry)
+	}
 
 	v := &types.Info{
 		ID:                 daemon.ID,
@@ -89,7 +120,8 @@ func (daemon *Daemon) SystemInfo() (*types.Info, error) {
 		NEventsListener:    daemon.EventsService.SubscribersCount(),
 		KernelVersion:      kernelVersion,
 		OperatingSystem:    operatingSystem,
-		IndexServerAddress: registry.IndexServer,
+		IndexServerAddress: registry.IndexServerAddress(),
+		IndexServerName:    registry.IndexServerName(),
 		OSType:             platform.OSType,
 		Architecture:       platform.Architecture,
 		RegistryConfig:     daemon.RegistryService.ServiceConfig(),
@@ -104,6 +136,9 @@ func (daemon *Daemon) SystemInfo() (*types.Info, error) {
 		HTTPProxy:          sockets.GetProxyEnv("http_proxy"),
 		HTTPSProxy:         sockets.GetProxyEnv("https_proxy"),
 		NoProxy:            sockets.GetProxyEnv("no_proxy"),
+		SecurityOptions:    securityOptions,
+		PkgVersion:         packageVersion,
+		Registries:         registries,
 	}
 
 	// TODO Windows. Refactor this more once sysinfo is refactored into
@@ -119,17 +154,24 @@ func (daemon *Daemon) SystemInfo() (*types.Info, error) {
 		v.CPUCfsQuota = sysInfo.CPUCfsQuota
 		v.CPUShares = sysInfo.CPUShares
 		v.CPUSet = sysInfo.Cpuset
+		v.Runtimes = daemon.configStore.GetAllRuntimes()
+		v.DefaultRuntime = daemon.configStore.GetDefaultRuntimeName()
 	}
 
-	if hostname, err := os.Hostname(); err == nil {
-		v.Name = hostname
+	hostname := ""
+	if hn, err := os.Hostname(); err != nil {
+		logrus.Warnf("Could not get hostname: %v", err)
+	} else {
+		hostname = hn
 	}
+	v.Name = hostname
 
 	return v, nil
 }
 
 // SystemVersion returns version information about the daemon.
 func (daemon *Daemon) SystemVersion() types.Version {
+	pkgVersion, _ := rpm.Version("/usr/bin/docker")
 	v := types.Version{
 		Version:      dockerversion.Version,
 		GitCommit:    dockerversion.GitCommit,
@@ -138,6 +180,7 @@ func (daemon *Daemon) SystemVersion() types.Version {
 		Arch:         runtime.GOARCH,
 		BuildTime:    dockerversion.BuildTime,
 		Experimental: utils.ExperimentalBuild(),
+		PkgVersion:   pkgVersion,
 	}
 
 	kernelVersion := "<unknown>"

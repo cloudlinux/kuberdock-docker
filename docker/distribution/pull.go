@@ -2,8 +2,10 @@ package distribution
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/docker/distribution/digest"
 	"github.com/docker/docker/api"
 	"github.com/docker/docker/distribution/metadata"
 	"github.com/docker/docker/distribution/xfer"
@@ -19,15 +21,15 @@ import (
 type ImagePullConfig struct {
 	// MetaHeaders stores HTTP headers with metadata about the image
 	MetaHeaders map[string][]string
-	// AuthConfig holds authentication credentials for authenticating with
-	// the registry.
-	AuthConfig *types.AuthConfig
+	// AuthConfigs holds authentication credentials for authenticating with
+	// the registries.
+	AuthConfigs map[string]types.AuthConfig
 	// ProgressOutput is the interface for showing the status of the pull
 	// operation.
 	ProgressOutput progress.Output
 	// RegistryService is the registry service to use for TLS configuration
 	// and endpoint lookup.
-	RegistryService *registry.Service
+	RegistryService registry.Service
 	// ImageEventLogger notifies events for a given image
 	ImageEventLogger func(id, name, action string)
 	// MetadataStore is the storage backend for distribution-specific
@@ -74,17 +76,60 @@ func newPuller(endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo,
 	return nil, fmt.Errorf("unknown version %d for registry %s", endpoint.Version, endpoint.URL)
 }
 
-// Pull initiates a pull operation. image is the repository name to pull, and
-// tag may be either empty, or indicate a specific tag to pull.
+// Pull initiates a pull operation for given reference. If the reference is
+// fully qualified, image will be pulled from given registry. Otherwise
+// additional registries will be queried until the reference is found.
 func Pull(ctx context.Context, ref reference.Named, imagePullConfig *ImagePullConfig) error {
+	// Unless the index name is specified, iterate over all registries until
+	// the matching image is found.
+	if reference.IsReferenceFullyQualified(ref) {
+		return pullFromRegistry(ctx, ref, imagePullConfig)
+	}
+	if len(registry.DefaultRegistries) == 0 {
+		return fmt.Errorf("No configured registry to pull from.")
+	}
+	err := ValidateRepoName(ref.Name())
+	if err != nil {
+		return err
+	}
+	for i, r := range registry.DefaultRegistries {
+		// Prepend the index name to the image name.
+		fqr, err := reference.QualifyUnqualifiedReference(ref, r)
+		if err != nil {
+			errStr := fmt.Sprintf("Failed to fully qualify %q name with %q registry: %v", ref.Name(), r, err)
+			progress.Message(imagePullConfig.ProgressOutput, "", errStr)
+			if i == len(registry.DefaultRegistries)-1 {
+				return fmt.Errorf(errStr)
+			}
+			continue
+		}
+		if err := pullFromRegistry(ctx, fqr, imagePullConfig); err != nil {
+			// make sure we get a final "Error response from daemon: "
+			progress.Message(imagePullConfig.ProgressOutput, "", err.Error())
+			if i == len(registry.DefaultRegistries)-1 {
+				return err
+			}
+		} else {
+			return nil
+		}
+	}
+
+	return nil
+}
+
+// pullFromRegistry initiates a pull operation from particular registry. ref is
+// a fully qualified image reference.
+func pullFromRegistry(ctx context.Context, ref reference.Named, imagePullConfig *ImagePullConfig) error {
 	// Resolve the Repository name from fqn to RepositoryInfo
 	repoInfo, err := imagePullConfig.RegistryService.ResolveRepository(ref)
 	if err != nil {
 		return err
 	}
 
+	progress.Messagef(imagePullConfig.ProgressOutput, "", "Trying to pull repository %s ... ", repoInfo.FullName())
+
 	// makes sure name is not empty or `scratch`
-	if err := validateRepoName(repoInfo.Name()); err != nil {
+	if err := ValidateRepoName(repoInfo.Name()); err != nil {
 		return err
 	}
 
@@ -97,7 +142,7 @@ func Pull(ctx context.Context, ref reference.Named, imagePullConfig *ImagePullCo
 		lastErr error
 
 		// discardNoSupportErrors is used to track whether an endpoint encountered an error of type registry.ErrNoSupport
-		// By default it is false, which means that if a ErrNoSupport error is encountered, it will be saved in lastErr.
+		// By default it is false, which means that if an ErrNoSupport error is encountered, it will be saved in lastErr.
 		// As soon as another kind of error is encountered, discardNoSupportErrors is set to true, avoiding the saving of
 		// any subsequent ErrNoSupport errors in lastErr.
 		// It's needed for pull-by-digest on v1 endpoints: if there are only v1 endpoints configured, the error should be
@@ -193,13 +238,32 @@ func writeStatus(requestedTag string, out progress.Output, layersDownloaded bool
 	}
 }
 
-// validateRepoName validates the name of a repository.
-func validateRepoName(name string) error {
+// ValidateRepoName validates the name of a repository.
+func ValidateRepoName(name string) error {
 	if name == "" {
 		return fmt.Errorf("Repository name can't be empty")
 	}
-	if name == api.NoBaseImageSpecifier {
+	if strings.TrimPrefix(name, registry.IndexName+"/") == api.NoBaseImageSpecifier {
 		return fmt.Errorf("'%s' is a reserved name", api.NoBaseImageSpecifier)
 	}
 	return nil
+}
+
+func addDigestReference(store reference.Store, ref reference.Named, dgst digest.Digest, imageID image.ID) error {
+	dgstRef, err := reference.WithDigest(ref, dgst)
+	if err != nil {
+		return err
+	}
+
+	if oldTagImageID, err := store.Get(dgstRef); err == nil {
+		if oldTagImageID != imageID {
+			// Updating digests not supported by reference store
+			logrus.Errorf("Image ID for digest %s changed from %s to %s, cannot update", dgst.String(), oldTagImageID, imageID)
+		}
+		return nil
+	} else if err != reference.ErrDoesNotExist {
+		return err
+	}
+
+	return store.AddDigest(dgstRef, imageID, true)
 }

@@ -83,7 +83,18 @@ func (d *driver) call(methodName string, arg interface{}, retVal maybeError) err
 	return nil
 }
 
-func (d *driver) CreateNetwork(id string, options map[string]interface{}, ipV4Data, ipV6Data []driverapi.IPAMData) error {
+func (d *driver) NetworkAllocate(id string, option map[string]string, ipV4Data, ipV6Data []driverapi.IPAMData) (map[string]string, error) {
+	return nil, types.NotImplementedErrorf("not implemented")
+}
+
+func (d *driver) NetworkFree(id string) error {
+	return types.NotImplementedErrorf("not implemented")
+}
+
+func (d *driver) EventNotify(etype driverapi.EventType, nid, tableName, key string, value []byte) {
+}
+
+func (d *driver) CreateNetwork(id string, options map[string]interface{}, nInfo driverapi.NetworkInfo, ipV4Data, ipV6Data []driverapi.IPAMData) error {
 	create := &api.CreateNetworkRequest{
 		NetworkID: id,
 		Options:   options,
@@ -283,7 +294,7 @@ func (d *driver) Type() string {
 // DiscoverNew is a notification for a new discovery event, such as a new node joining a cluster
 func (d *driver) DiscoverNew(dType discoverapi.DiscoveryType, data interface{}) error {
 	if dType != discoverapi.NodeDiscovery {
-		return fmt.Errorf("Unknown discovery type : %v", dType)
+		return nil
 	}
 	notif := &api.DiscoveryNotification{
 		DiscoveryType: dType,
@@ -295,7 +306,7 @@ func (d *driver) DiscoverNew(dType discoverapi.DiscoveryType, data interface{}) 
 // DiscoverDelete is a notification for a discovery delete event, such as a node leaving a cluster
 func (d *driver) DiscoverDelete(dType discoverapi.DiscoveryType, data interface{}) error {
 	if dType != discoverapi.NodeDiscovery {
-		return fmt.Errorf("Unknown discovery type : %v", dType)
+		return nil
 	}
 	notif := &api.DiscoveryNotification{
 		DiscoveryType: dType,

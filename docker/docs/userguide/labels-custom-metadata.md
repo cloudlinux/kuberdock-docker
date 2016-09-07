@@ -22,7 +22,7 @@ times but with different values, newer labels overwrite previous labels. Docker
 uses the last `key=value` you supply.
 
 >**Note:** Support for daemon-labels was added in Docker 1.4.1. Labels on
->containers and images are new in Docker 1.6.0
+>containers and images were added in Docker 1.6.0
 
 ## Label keys (namespaces)
 
@@ -192,6 +192,7 @@ on how to query labels set on a container.
 These labels appear as part of the `docker info` output for the daemon:
 
     $ docker -D info
+
     Containers: 12
      Running: 5
      Paused: 2
@@ -207,6 +208,7 @@ These labels appear as part of the `docker info` output for the daemon:
     Logging Driver: json-file
     Kernel Version: 3.19.0-22-generic
     Operating System: Ubuntu 15.04
+    Number of Hooks: 2
     CPUs: 24
     Total Memory: 62.86 GiB
     Name: docker
