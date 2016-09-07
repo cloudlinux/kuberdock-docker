@@ -17,12 +17,13 @@ import (
 //
 // Usage: docker exec [OPTIONS] CONTAINER COMMAND [ARG...]
 func (cli *DockerCli) CmdExec(args ...string) error {
-	cmd := Cli.Subcmd("exec", []string{"CONTAINER COMMAND [ARG...]"}, Cli.DockerCommands["exec"].Description, true)
+	cmd := Cli.Subcmd("exec", []string{"[OPTIONS] CONTAINER COMMAND [ARG...]"}, Cli.DockerCommands["exec"].Description, true)
 	detachKeys := cmd.String([]string{"-detach-keys"}, "", "Override the key sequence for detaching a container")
 
 	execConfig, err := ParseExec(cmd, args)
+	container := cmd.Arg(0)
 	// just in case the ParseExec does not exit
-	if execConfig.Container == "" || err != nil {
+	if container == "" || err != nil {
 		return Cli.StatusError{StatusCode: 1}
 	}
 
@@ -33,7 +34,9 @@ func (cli *DockerCli) CmdExec(args ...string) error {
 	// Send client escape keys
 	execConfig.DetachKeys = cli.configFile.DetachKeys
 
-	response, err := cli.client.ContainerExecCreate(context.Background(), *execConfig)
+	ctx := context.Background()
+
+	response, err := cli.client.ContainerExecCreate(ctx, container, *execConfig)
 	if err != nil {
 		return err
 	}
@@ -55,7 +58,7 @@ func (cli *DockerCli) CmdExec(args ...string) error {
 			Tty:    execConfig.Tty,
 		}
 
-		if err := cli.client.ContainerExecStart(context.Background(), execID, execStartCheck); err != nil {
+		if err := cli.client.ContainerExecStart(ctx, execID, execStartCheck); err != nil {
 			return err
 		}
 		// For now don't print this - wait for when we support exec wait()
@@ -84,23 +87,17 @@ func (cli *DockerCli) CmdExec(args ...string) error {
 		}
 	}
 
-	resp, err := cli.client.ContainerExecAttach(context.Background(), execID, *execConfig)
+	resp, err := cli.client.ContainerExecAttach(ctx, execID, *execConfig)
 	if err != nil {
 		return err
 	}
 	defer resp.Close()
-	if in != nil && execConfig.Tty {
-		if err := cli.setRawTerminal(); err != nil {
-			return err
-		}
-		defer cli.restoreTerminal(in)
-	}
 	errCh = promise.Go(func() error {
-		return cli.holdHijackedConnection(execConfig.Tty, in, out, stderr, resp)
+		return cli.HoldHijackedConnection(ctx, execConfig.Tty, in, out, stderr, resp)
 	})
 
 	if execConfig.Tty && cli.isTerminalIn {
-		if err := cli.monitorTtySize(execID, true); err != nil {
+		if err := cli.MonitorTtySize(ctx, execID, true); err != nil {
 			fmt.Fprintf(cli.err, "Error monitoring TTY size: %s\n", err)
 		}
 	}
@@ -111,7 +108,7 @@ func (cli *DockerCli) CmdExec(args ...string) error {
 	}
 
 	var status int
-	if _, status, err = getExecExitCode(cli, execID); err != nil {
+	if _, status, err = cli.getExecExitCode(ctx, execID); err != nil {
 		return err
 	}
 
@@ -134,13 +131,11 @@ func ParseExec(cmd *flag.FlagSet, args []string) (*types.ExecConfig, error) {
 		flUser       = cmd.String([]string{"u", "-user"}, "", "Username or UID (format: <name|uid>[:<group|gid>])")
 		flPrivileged = cmd.Bool([]string{"-privileged"}, false, "Give extended privileges to the command")
 		execCmd      []string
-		container    string
 	)
 	cmd.Require(flag.Min, 2)
 	if err := cmd.ParseFlags(args, true); err != nil {
 		return nil, err
 	}
-	container = cmd.Arg(0)
 	parsedArgs := cmd.Args()
 	execCmd = parsedArgs[1:]
 
@@ -149,7 +144,6 @@ func ParseExec(cmd *flag.FlagSet, args []string) (*types.ExecConfig, error) {
 		Privileged: *flPrivileged,
 		Tty:        *flTty,
 		Cmd:        execCmd,
-		Container:  container,
 		Detach:     *flDetach,
 	}
 

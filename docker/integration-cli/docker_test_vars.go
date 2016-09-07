@@ -10,8 +10,10 @@ import (
 )
 
 var (
-	// the docker binary to use
+	// the docker client binary to use
 	dockerBinary = "docker"
+	// the docker daemon binary to use
+	dockerdBinary = "dockerd"
 
 	// path to containerd's ctr binary
 	ctrBinary = "docker-containerd-ctr"
@@ -20,7 +22,9 @@ var (
 	registryImageName = "registry"
 
 	// the private registry to use for tests
-	privateRegistryURL = "127.0.0.1:5000"
+	privateRegistryURL  = "127.0.0.1:5000"
+	privateRegistryURL2 = "127.0.0.1:5001"
+	privateRegistryURL3 = "127.0.0.1:5002"
 
 	// TODO Windows CI. These are incorrect and need fixing into
 	// platform specific pieces.
@@ -40,8 +44,8 @@ var (
 
 	// windowsDaemonKV is used on Windows to distinguish between different
 	// versions. This is necessary to enable certain tests based on whether
-	// the platform supports it. For example, Windows Server 2016 TP3 does
-	// not support volumes, but TP4 does.
+	// the platform supports it. For example, Windows Server 2016 TP3 did
+	// not support volumes, but TP4 did.
 	windowsDaemonKV int
 
 	// daemonDefaultImage is the name of the default image to use when running

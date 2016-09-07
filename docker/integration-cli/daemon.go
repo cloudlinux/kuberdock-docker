@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,11 +23,12 @@ import (
 	"github.com/go-check/check"
 )
 
+type localImageEntry struct {
+	name, tag, id, size string
+}
+
 // Daemon represents a Docker daemon for the testing framework.
 type Daemon struct {
-	// Defaults to "daemon"
-	// Useful to set to --daemon or -d for checking backwards compatibility
-	Command     string
 	GlobalFlags []string
 
 	id                string
@@ -72,7 +75,6 @@ func NewDaemon(c *check.C) *Daemon {
 	}
 
 	return &Daemon{
-		Command:       "daemon",
 		id:            id,
 		c:             c,
 		folder:        daemonFolder,
@@ -137,11 +139,10 @@ func (d *Daemon) Start(args ...string) error {
 
 // StartWithLogFile will start the daemon and attach its streams to a given file.
 func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
-	dockerBinary, err := exec.LookPath(dockerBinary)
+	dockerdBinary, err := exec.LookPath(dockerdBinary)
 	d.c.Assert(err, check.IsNil, check.Commentf("[%s] could not find docker binary in $PATH", d.id))
 
 	args := append(d.GlobalFlags,
-		d.Command,
 		"--containerd", "/var/run/docker/libcontainerd/docker-containerd.sock",
 		"--graph", d.root,
 		"--exec-root", filepath.Join(d.folder, "exec-root"),
@@ -175,8 +176,8 @@ func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 	}
 
 	args = append(args, providedArgs...)
-	d.cmd = exec.Command(dockerBinary, args...)
-
+	d.cmd = exec.Command(dockerdBinary, args...)
+	d.cmd.Env = append(os.Environ(), "DOCKER_SERVICE_PREFER_OFFLINE_IMAGE=1")
 	d.cmd.Stdout = out
 	d.cmd.Stderr = out
 	d.logFile = out
@@ -234,6 +235,8 @@ func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 				return fmt.Errorf("[%s] error querying daemon for root directory: %v", d.id, err)
 			}
 			return nil
+		case <-d.wait:
+			return fmt.Errorf("[%s] Daemon exited during startup", d.id)
 		}
 	}
 }
@@ -295,9 +298,9 @@ out1:
 		select {
 		case err := <-d.wait:
 			return err
-		case <-time.After(15 * time.Second):
+		case <-time.After(20 * time.Second):
 			// time for stopping jobs and run onShutdown hooks
-			d.c.Log("timeout")
+			d.c.Logf("timeout: %v", d.id)
 			break out1
 		}
 	}
@@ -309,7 +312,7 @@ out2:
 			return err
 		case <-tick:
 			i++
-			if i > 4 {
+			if i > 5 {
 				d.c.Logf("tried to interrupt daemon for %d times, now try to kill it", i)
 				break out2
 			}
@@ -455,6 +458,27 @@ func (d *Daemon) CmdWithArgs(daemonArgs []string, name string, arg ...string) (s
 	return string(b), err
 }
 
+// SockRequest executes a socket request on a daemon and returns statuscode and output.
+func (d *Daemon) SockRequest(method, endpoint string, data interface{}) (int, []byte, error) {
+	jsonData := bytes.NewBuffer(nil)
+	if err := json.NewEncoder(jsonData).Encode(data); err != nil {
+		return -1, nil, err
+	}
+
+	res, body, err := d.SockRequestRaw(method, endpoint, jsonData, "application/json")
+	if err != nil {
+		return -1, nil, err
+	}
+	b, err := readBody(body)
+	return res.StatusCode, b, err
+}
+
+// SockRequestRaw executes a socket request on a daemon and returns a http
+// response and a reader for the output data.
+func (d *Daemon) SockRequestRaw(method, endpoint string, data io.Reader, ct string) (*http.Response, io.ReadCloser, error) {
+	return sockRequestRawToDaemon(method, endpoint, data, ct, d.sock())
+}
+
 // LogFileName returns the path the the daemon's log file
 func (d *Daemon) LogFileName() string {
 	return d.logFile.Name()
@@ -462,6 +486,16 @@ func (d *Daemon) LogFileName() string {
 
 func (d *Daemon) getIDByName(name string) (string, error) {
 	return d.inspectFieldWithError(name, "Id")
+}
+
+func (d *Daemon) activeContainers() (ids []string) {
+	out, _ := d.Cmd("ps", "-q")
+	for _, id := range strings.Split(out, "\n") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return
 }
 
 func (d *Daemon) inspectFilter(name, filter string) (string, error) {
@@ -483,4 +517,103 @@ func (d *Daemon) findContainerIP(id string) string {
 		d.c.Log(err)
 	}
 	return strings.Trim(out, " \r\n'")
+}
+
+func (d *Daemon) buildImageWithOut(name, dockerfile string, useCache bool, buildFlags ...string) (string, int, error) {
+	buildCmd := buildImageCmdWithHost(name, dockerfile, d.sock(), useCache, buildFlags...)
+	return runCommandWithOutput(buildCmd)
+}
+
+func (d *Daemon) checkActiveContainerCount(c *check.C) (interface{}, check.CommentInterface) {
+	out, err := d.Cmd("ps", "-q")
+	c.Assert(err, checker.IsNil)
+	if len(strings.TrimSpace(out)) == 0 {
+		return 0, nil
+	}
+	return len(strings.Split(strings.TrimSpace(out), "\n")), check.Commentf("output: %q", string(out))
+}
+
+// getAndTestImageEntry lists  images of given Docker daemon and assert
+// expected values. Unless expectedImageCount is negative, assert the number of
+// images of Docker daemon. Unless repoName is empty, assert it exists and
+// return its matching localImageEntry. If the tag is missing, it won't be
+// checked. Unless expectedImageID is empty, assert that image ID of given
+// repoName matches this one.
+func (d *Daemon) getAndTestImageEntry(c *check.C, expectedImageCount int, repoName, expectedImageID string) *localImageEntry {
+	reRefTagged := regexp.MustCompile(`^(.*):([^:/]+)$`)
+	images := d.getImages(c)
+	if expectedImageCount >= 0 && len(images) != expectedImageCount {
+		switch expectedImageCount {
+		case 0:
+			c.Fatalf("expected empty local image database, got %d images", len(images))
+		case 1:
+			c.Fatalf("expected exactly 1 local image, got %d", len(images))
+		default:
+			c.Fatalf("expected exactly %d local images, got %d", expectedImageCount, len(images))
+		}
+	}
+
+	matchTag := reRefTagged.MatchString(repoName)
+
+	if repoName != "" {
+		img, found := images[repoName]
+		if !found {
+			keys := make([]string, 0, len(images))
+			for k := range images {
+				if !matchTag {
+					if strings.HasPrefix(k, repoName+":") {
+						found = true
+						img = images[k]
+						break
+					}
+				}
+				keys = append(keys, k)
+			}
+			if !found {
+				c.Fatalf("%s missing in list of images: %v", repoName, keys)
+			}
+		}
+
+		if expectedImageID != "" && img.id != expectedImageID {
+			c.Fatalf("image ID of %s does not match expected (%s != %s)", repoName, img.id, expectedImageID)
+		}
+
+		return img
+	}
+	return nil
+}
+
+func (d *Daemon) inspectField(name, field string) (string, error) {
+	format := fmt.Sprintf("{{.%s}}", field)
+	out, err := d.Cmd("inspect", "-f", format, name)
+	if err != nil {
+		return "", fmt.Errorf("failed to inspect %s: %s", name, out)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// getImages lists images of given Docker daemon and returns it in a
+// map with keys in form <name>:<tag>.
+func (d *Daemon) getImages(c *check.C, args ...string) map[string]*localImageEntry {
+	reImageEntry := regexp.MustCompile(`(?m)^([[:alnum:]/.:_<>-]+)\s+([[:alnum:]._<>-]+)\s+((?:sha\d+:)?[a-fA-F0-9]+)\s+\S+\s+(.+)`)
+	result := make(map[string]*localImageEntry)
+
+	out, err := d.Cmd("images", args...)
+	if err != nil {
+		c.Fatalf("failed to list images: %v", err)
+	}
+	matches := reImageEntry.FindAllStringSubmatch(out, -1)
+	if matches != nil {
+		for i, match := range matches {
+			if i < 1 && match[1] == "REPOSITORY" {
+				continue // skip header
+			}
+			key := match[1]
+			if match[2] != "" && match[2] != "<none>" {
+				key += ":" + match[2]
+			}
+			result[key] = &localImageEntry{match[1], match[2], match[3], match[4]}
+		}
+	}
+	return result
 }

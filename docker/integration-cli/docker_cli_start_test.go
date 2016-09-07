@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -24,8 +25,8 @@ func (s *DockerSuite) TestStartAttachReturnsOnError(c *check.C) {
 	go func() {
 		// Attempt to start attached to the container that won't start
 		// This should return an error immediately since the container can't be started
-		if _, _, err := dockerCmdWithError("start", "-a", "test2"); err == nil {
-			ch <- fmt.Errorf("Expected error but got none")
+		if out, _, err := dockerCmdWithError("start", "-a", "test2"); err == nil {
+			ch <- fmt.Errorf("Expected error but got none:\n%s", out)
 		}
 		close(ch)
 	}()
@@ -170,4 +171,17 @@ func (s *DockerSuite) TestStartAttachMultipleContainers(c *check.C) {
 		// Container running state wrong
 		c.Assert(out, checker.Equals, expected)
 	}
+}
+
+// Test case for #23716
+func (s *DockerSuite) TestStartAttachWithRename(c *check.C) {
+	testRequires(c, DaemonIsLinux)
+	dockerCmd(c, "create", "-t", "--name", "before", "busybox")
+	go func() {
+		c.Assert(waitRun("before"), checker.IsNil)
+		dockerCmd(c, "rename", "before", "after")
+		dockerCmd(c, "stop", "--time=2", "after")
+	}()
+	_, stderr, _, _ := runCommandWithStdoutStderr(exec.Command(dockerBinary, "start", "-a", "before"))
+	c.Assert(stderr, checker.Not(checker.Contains), "No such container")
 }

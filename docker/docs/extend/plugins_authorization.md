@@ -49,6 +49,11 @@ Each plugin must reside within directories described under the
 **Note**: the abbreviations `AuthZ` and `AuthN` mean authorization and authentication
 respectively.
 
+## Default user authorization mechanism
+
+If TLS is enabled in the [Docker daemon](../security/https.md), the default user authorization flow extracts the user details from the certificate subject name.
+That is, the `User` field is set to the client certificate subject common name, and the `AuthenticationMethod` field is set to `TLS`.
+
 ## Basic architecture
 
 You are responsible for registering your plugin as part of the Docker daemon
@@ -136,11 +141,11 @@ docker: Error response from daemon: plugin PLUGIN_NAME failed with error: AuthZP
 In addition to Docker's standard plugin registration method, each plugin
 should implement the following two methods:
 
-* `/AuthzPlugin.AuthZReq` This authorize request method is called before the Docker daemon processes the client request.
+* `/AuthZPlugin.AuthZReq` This authorize request method is called before the Docker daemon processes the client request.
 
-* `/AuthzPlugin.AuthZRes` This authorize response method is called before the response is returned from Docker daemon to the client.
+* `/AuthZPlugin.AuthZRes` This authorize response method is called before the response is returned from Docker daemon to the client.
 
-#### /AuthzPlugin.AuthZReq
+#### /AuthZPlugin.AuthZReq
 
 **Request**:
 
@@ -151,8 +156,7 @@ should implement the following two methods:
     "RequestMethod":     "The HTTP method",
     "RequestURI":        "The HTTP request URI",
     "RequestBody":       "Byte array containing the raw HTTP request body",
-    "RequestHeader":     "Byte array containing the raw HTTP request header as a map[string][]string ",
-    "RequestStatusCode": "Request status code"
+    "RequestHeader":     "Byte array containing the raw HTTP request header as a map[string][]string "
 }
 ```
 
@@ -165,7 +169,7 @@ should implement the following two methods:
     "Err":   "The error message if things go wrong"
 }
 ```
-#### /AuthzPlugin.AuthZRes
+#### /AuthZPlugin.AuthZRes
 
 **Request**:
 
@@ -177,7 +181,6 @@ should implement the following two methods:
     "RequestURI":        "The HTTP request URI",
     "RequestBody":       "Byte array containing the raw HTTP request body",
     "RequestHeader":     "Byte array containing the raw HTTP request header as a map[string][]string",
-    "RequestStatusCode": "Request status code",
     "ResponseBody":      "Byte array containing the raw HTTP response body",
     "ResponseHeader":    "Byte array containing the raw HTTP response header as a map[string][]string",
     "ResponseStatusCode":"Response status code"
@@ -190,16 +193,9 @@ should implement the following two methods:
 {
    "Allow":              "Determined whether the user is allowed or not",
    "Msg":                "The authorization message",
-   "Err":                "The error message if things go wrong",
-   "ModifiedBody":       "Byte array containing a modified body of the raw HTTP body (or nil if no changes required)",
-   "ModifiedHeader":     "Byte array containing a modified header of the HTTP response (or nil if no changes required)",
-   "ModifiedStatusCode": "int containing the modified version of the status code (or 0 if not change is required)"
+   "Err":                "The error message if things go wrong"
 }
 ```
-
-The modified response enables the authorization plugin to manipulate the content
-of the HTTP response. In case of more than one plugin, each subsequent plugin
-receives a response (optionally) modified by a previous plugin.
 
 ### Request authorization
 
