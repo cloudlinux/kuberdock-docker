@@ -1,0 +1,7 @@
+Verified+1: alternatives internal <alternatives@cloudlinux.com>
+Code-Review+2: Eugene Zamriy <ezamriy@cloudlinux.com>
+Submitted-by: Eugene Zamriy <ezamriy@cloudlinux.com>
+Submitted-at: Thu, 08 Sep 2016 09:48:41 +0300
+Reviewed-on: https://gerrit.cloudlinux.com/12050
+Project: docker-kuberdock
+Branch: refs/heads/kuberdock
