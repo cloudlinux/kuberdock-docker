@@ -51,7 +51,7 @@
 Name: %{repo}
 Epoch: 1
 Version: %{d_version}
-Release: 10%{?dist}
+Release: 11%{?dist}
 Summary: Automates deployment of containerized applications
 License: ASL 2.0
 URL: https://%{import_path}
