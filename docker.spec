@@ -65,7 +65,7 @@
 Name: %{repo}
 Epoch: 1
 Version: %{d_version}
-Release: 1%{?dist}
+Release: 2%{?dist}
 Summary: Automates deployment of containerized applications
 License: ASL 2.0
 URL: https://%{import_path}
@@ -519,6 +519,9 @@ exit 0
 
 
 %changelog
+* Thu Oct 06 2016 Sergey Fokin <sfokin@cloudlinux.com> - 1:1.12.1-2
+- fixes in systemd unit files
+
 * Wed Sep 07 2016 Sergey Fokin <sfokin@cloudlinux.com> - 1:1.12.1-1
 - update docker to 1.12.1 (f1040da127b7f1167ab351cb429ac5faa421c7cf)
   update docker-storage-setup d642523c163820137c9ef07f4cbcb148c98aacf5
