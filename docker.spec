@@ -65,7 +65,7 @@
 Name: %{repo}
 Epoch: 1
 Version: %{d_version}
-Release: 2%{?dist}
+Release: 3%{?dist}
 Summary: Automates deployment of containerized applications
 License: ASL 2.0
 URL: https://%{import_path}
@@ -519,6 +519,9 @@ exit 0
 
 
 %changelog
+* Mon Oct 17 2016 Sergey Fokin <sfokin@cloudlinux.com> - 1:1.12.1-3
+- set log-level to error
+
 * Thu Oct 06 2016 Sergey Fokin <sfokin@cloudlinux.com> - 1:1.12.1-2
 - fixes in systemd unit files
 
