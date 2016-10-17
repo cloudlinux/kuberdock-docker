@@ -1,0 +1,8 @@
+Code-Review+1: Aleksandr Skorodumov <askorodumov@cloudlinux.com>
+Code-Review+2: Maksym Lobur <mlobur@cloudlinux.com>
+Verified+1: Sergey Fokin <sfokin@cloudlinux.com>
+Submitted-by: Sergey Fokin <sfokin@cloudlinux.com>
+Submitted-at: Mon, 17 Oct 2016 17:05:20 +0300
+Reviewed-on: https://gerrit.cloudlinux.com/13174
+Project: docker-kuberdock
+Branch: refs/heads/kuberdock
