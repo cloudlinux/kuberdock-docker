@@ -1,7 +1,7 @@
 # /etc/sysconfig/docker
 
 # Modify these options if you want to change the way the docker daemon runs
-OPTIONS='--selinux-enabled --log-driver=journald --log-level=error'
+OPTIONS='--selinux-enabled --log-driver=json-file --log-level=error'
 
 DOCKER_CERT_PATH=/etc/docker
 
