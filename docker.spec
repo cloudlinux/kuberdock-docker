@@ -63,9 +63,9 @@
 %endif
 
 Name: %{repo}
-Epoch: 1
+Epoch: 3
 Version: %{d_version}
-Release: 4%{?dist}
+Release: 5%{?dist}
 Summary: Automates deployment of containerized applications
 License: ASL 2.0
 URL: https://%{import_path}
@@ -519,6 +519,9 @@ exit 0
 
 
 %changelog
+* Tue Dec 20 2016 Sergey Fokin <sfokin@cloudlinux.com> - 3:1.12.1-5
+- bump epoch to 3
+
 * Mon Oct 19 2016 Aleksandr Skorodumov <askorodumov@cloudlinux.com> - 1:1.12.1-4
 - set the default log-driver to json-file
 
